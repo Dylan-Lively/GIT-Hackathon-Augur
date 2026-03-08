@@ -8,6 +8,7 @@ const LABELS = ["Strategy A", "Strategy B", "Strategy C"]
 const fmt = (n) => n >= 1000 ? `$${(n / 1000).toFixed(0)}k` : `$${Math.round(n)}`
 const fmtFull = (n) => "$" + Math.round(n).toLocaleString()
 const fmtPct = (n) => (n >= 0 ? "+" : "") + n.toFixed(1) + "%"
+const fmtProfit = (n) => (n >= 0 ? "+" : "") + fmt(n) + "/mo"
 
 function transformPath(path, index, initialCash) {
   const final = path.finalState ?? path.nodes?.[path.nodes.length - 1]?.state
@@ -15,11 +16,12 @@ function transformPath(path, index, initialCash) {
   const timeLabels = ["Start", ...path.nodes.map(n => `Mo ${n.state.monthsElapsed}`)]
   const timeValues = [0, ...path.nodes.map(n => n.state.monthsElapsed)]
   const totalHorizon = final?.monthsElapsed ?? timeValues[timeValues.length - 1]
-  const growth = ((final.cash - initialCash) / initialCash) * 100
+  const cashGrowth = ((final.cash - initialCash) / initialCash) * 100
   const minRunway = Math.min(...path.nodes.map(n => n.state.runway))
+  const riskScore = Math.min(100, Math.round(minRunway * 20))
 
   return {
-    id: LABELS[2 - index],
+    id: LABELS[index],
     pathId: path.id,
     score: Math.round(path.score),
     progression,
@@ -27,8 +29,9 @@ function transformPath(path, index, initialCash) {
     timeValues,
     totalHorizon,
     final,
-    growth,
+    cashGrowth,
     minRunway,
+    riskScore,
     nodes: path.nodes,
     initialCash,
   }
@@ -41,7 +44,7 @@ function rescorePaths(paths, goals, risk) {
   }
   const cashN = normalize(paths.map(p => p.final.cash))
   const profitN = normalize(paths.map(p => p.final.profit))
-  const growthN = normalize(paths.map(p => p.growth))
+  const growthN = normalize(paths.map(p => p.cashGrowth))
   const riskN = normalize(paths.map(p => p.minRunway))
   const riskAversion = (100 - risk) / 100
 
@@ -54,6 +57,230 @@ function rescorePaths(paths, goals, risk) {
     const score = Math.round(Math.max(0, Math.min(100, goalScore - riskPenalty + 10)))
     return { ...p, score }
   }).sort((a, b) => b.score - a.score)
+}
+
+// ── Tree Build Animation ──────────────────────────────────────────────────────
+function TreeAnimation({ onComplete }) {
+  const canvasRef = useRef()
+  const stateRef = useRef({ nodes: [], edges: [], paths: [], phase: "build", t: 0, done: false })
+  const rafRef = useRef()
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext("2d")
+    const W = canvas.width, H = canvas.height
+    const cx = W / 2
+
+    // Theme colours
+    const BG = "#0f172a"
+    const DIM = "#1e293b"
+    const PATH_COLORS = ["#16a34a", "#2563eb", "#d97706"]
+    const NODE_COLOR = "#334155"
+    const EDGE_COLOR = "#1e293b"
+
+    // Build a fake decision tree
+    const ROOT = { x: cx, y: 60, id: 0 }
+    const L1 = [
+      { x: cx - 280, y: 160, id: 1 },
+      { x: cx - 80,  y: 160, id: 2 },
+      { x: cx + 80,  y: 160, id: 3 },
+      { x: cx + 280, y: 160, id: 4 },
+    ]
+    const L2 = [
+      { x: cx - 320, y: 270, id: 5 },
+      { x: cx - 230, y: 270, id: 6 },
+      { x: cx - 130, y: 270, id: 7 },
+      { x: cx - 30,  y: 270, id: 8 },
+      { x: cx + 50,  y: 270, id: 9 },
+      { x: cx + 160, y: 270, id: 10 },
+      { x: cx + 260, y: 270, id: 11 },
+      { x: cx + 340, y: 270, id: 12 },
+    ]
+    const L3 = [
+      { x: cx - 340, y: 370, id: 13 },
+      { x: cx - 270, y: 370, id: 14 },
+      { x: cx - 200, y: 370, id: 15 },
+      { x: cx - 110, y: 370, id: 16 },
+      { x: cx - 30,  y: 370, id: 17 },
+      { x: cx + 60,  y: 370, id: 18 },
+      { x: cx + 150, y: 370, id: 19 },
+      { x: cx + 240, y: 370, id: 20 },
+      { x: cx + 310, y: 370, id: 21 },
+    ]
+
+    const allNodes = [ROOT, ...L1, ...L2, ...L3]
+    const allEdges = [
+      ...L1.map(n => ({ from: ROOT, to: n })),
+      { from: L1[0], to: L2[0] }, { from: L1[0], to: L2[1] },
+      { from: L1[1], to: L2[2] }, { from: L1[1], to: L2[3] },
+      { from: L1[2], to: L2[4] }, { from: L1[2], to: L2[5] },
+      { from: L1[3], to: L2[6] }, { from: L1[3], to: L2[7] },
+      { from: L2[0], to: L3[0] }, { from: L2[1], to: L3[1] },
+      { from: L2[2], to: L3[2] }, { from: L2[3], to: L3[3] },
+      { from: L2[4], to: L3[4] }, { from: L2[5], to: L3[5] },
+      { from: L2[6], to: L3[6] }, { from: L2[7], to: L3[7] },
+      { from: L2[7], to: L3[8] },
+    ]
+
+    // Three highlight paths
+    const highlightPaths = [
+      [ROOT, L1[0], L2[0], L3[0]],
+      [ROOT, L1[2], L2[4], L3[4]],
+      [ROOT, L1[3], L2[7], L3[8]],
+    ]
+
+    let startTime = null
+    const TOTAL = 3200 // ms total animation
+
+    function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t }
+
+    function draw(ts) {
+      if (!startTime) startTime = ts
+      const elapsed = ts - startTime
+      const raw = Math.min(elapsed / TOTAL, 1)
+      const t = ease(raw)
+
+      ctx.fillStyle = BG
+      ctx.fillRect(0, 0, W, H)
+
+      const buildEnd = 0.55
+      const selectStart = 0.60
+      const fadeEnd = 1.0
+
+      if (raw < buildEnd) {
+        // Phase 1: rapidly build the tree
+        const progress = raw / buildEnd
+        const totalItems = allEdges.length + allNodes.length
+        const revealed = Math.floor(progress * totalItems)
+
+        // Draw revealed edges
+        allEdges.slice(0, Math.max(0, revealed - allNodes.length)).forEach(e => {
+          ctx.beginPath()
+          ctx.moveTo(e.from.x, e.from.y)
+          ctx.lineTo(e.to.x, e.to.y)
+          ctx.strokeStyle = EDGE_COLOR
+          ctx.lineWidth = 1.5
+          ctx.stroke()
+        })
+
+        // Draw revealed nodes
+        allNodes.slice(0, Math.min(revealed, allNodes.length)).forEach(n => {
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, n.id === 0 ? 8 : 5, 0, Math.PI * 2)
+          ctx.fillStyle = n.id === 0 ? "#94a3b8" : NODE_COLOR
+          ctx.fill()
+        })
+
+        // Counter text
+        const pathCount = Math.floor(progress * 7654)
+        ctx.fillStyle = "#334155"
+        ctx.font = "600 13px monospace"
+        ctx.textAlign = "center"
+        ctx.fillText(`${pathCount.toLocaleString()} paths evaluated...`, cx, H - 36)
+
+      } else {
+        // Phase 2: all nodes visible, highlight the 3 paths
+        const selectProgress = Math.min((raw - selectStart) / (fadeEnd - selectStart), 1)
+
+        // Draw all dim edges
+        allEdges.forEach(e => {
+          ctx.beginPath()
+          ctx.moveTo(e.from.x, e.from.y)
+          ctx.lineTo(e.to.x, e.to.y)
+          ctx.strokeStyle = EDGE_COLOR
+          ctx.lineWidth = 1
+          ctx.stroke()
+        })
+
+        // Draw all dim nodes
+        allNodes.forEach(n => {
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, n.id === 0 ? 8 : 5, 0, Math.PI * 2)
+          ctx.fillStyle = DIM
+          ctx.fill()
+        })
+
+        // Highlight each path with staggered timing
+        highlightPaths.forEach((path, pi) => {
+          const delay = pi * 0.18
+          const pathProgress = Math.max(0, Math.min((selectProgress - delay) / 0.45, 1))
+          if (pathProgress <= 0) return
+
+          const color = PATH_COLORS[pi]
+
+          // Glow edges
+          for (let i = 0; i < path.length - 1; i++) {
+            const segProgress = Math.min(Math.max((pathProgress - i * 0.25) / 0.35, 0), 1)
+            if (segProgress <= 0) continue
+            const from = path[i], to = path[i + 1]
+            const ex = from.x + (to.x - from.x) * segProgress
+            const ey = from.y + (to.y - from.y) * segProgress
+
+            ctx.beginPath()
+            ctx.moveTo(from.x, from.y)
+            ctx.lineTo(ex, ey)
+            ctx.strokeStyle = color
+            ctx.lineWidth = 2.5
+            ctx.shadowColor = color
+            ctx.shadowBlur = 8
+            ctx.stroke()
+            ctx.shadowBlur = 0
+          }
+
+          // Highlight nodes along path
+          path.forEach((n, ni) => {
+            const nodeProgress = Math.min(Math.max((pathProgress - ni * 0.22) / 0.3, 0), 1)
+            if (nodeProgress <= 0) return
+            ctx.beginPath()
+            ctx.arc(n.x, n.y, (n.id === 0 ? 10 : 7) * nodeProgress, 0, Math.PI * 2)
+            ctx.fillStyle = color
+            ctx.shadowColor = color
+            ctx.shadowBlur = 12 * nodeProgress
+            ctx.fill()
+            ctx.shadowBlur = 0
+          })
+        })
+
+        // Label the 3 terminal nodes
+        if (selectProgress > 0.85) {
+          const alpha = (selectProgress - 0.85) / 0.15
+          highlightPaths.forEach((path, pi) => {
+            const end = path[path.length - 1]
+            const color = PATH_COLORS[pi]
+            ctx.globalAlpha = alpha
+            ctx.fillStyle = color
+            ctx.font = "700 11px monospace"
+            ctx.textAlign = "center"
+            ctx.fillText(`Strategy ${String.fromCharCode(65 + pi)}`, end.x, end.y + 22)
+            ctx.globalAlpha = 1
+          })
+        }
+
+        ctx.fillStyle = "#475569"
+        ctx.font = "600 13px monospace"
+        ctx.textAlign = "center"
+        ctx.fillText("7,654 paths evaluated · top 3 selected", cx, H - 36)
+      }
+
+      if (raw < 1) {
+        rafRef.current = requestAnimationFrame(draw)
+      } else {
+        setTimeout(onComplete, 200)
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [onComplete])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={800}
+      height={480}
+      style={{ width: "100%", maxWidth: 800, borderRadius: 16, display: "block" }}
+    />
+  )
 }
 
 function DivergenceChart({ paths, activeIndex }) {
@@ -173,10 +400,29 @@ function ScoreArc({ score, color }) {
   )
 }
 
+function RiskBadge({ score }) {
+  const level = score >= 70 ? "LOW" : score >= 40 ? "MED" : "HIGH"
+  const color = score >= 70 ? "#16a34a" : score >= 40 ? "#d97706" : "#ef4444"
+  const bg = score >= 70 ? "#dcfce7" : score >= 40 ? "#fef3c7" : "#fee2e2"
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 4, background: bg, borderRadius: 6, padding: "2px 7px" }}>
+      <div style={{ width: 6, height: 6, borderRadius: "50%", background: color }} />
+      <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "monospace" }}>{level} RISK</span>
+    </div>
+  )
+}
+
 function StrategyCard({ path, rank, isFront, offset, onClick, onDetail }) {
   const color = CARD_COLORS[rank]
   const accent = CARD_ACCENTS[rank]
   const scale = isFront ? 1 : 0.88
+
+  const metrics = [
+    { label: "FINAL CASH",      value: fmtFull(path.final.cash),          hi: true  },
+    { label: "MONTHLY PROFIT",  value: fmtProfit(path.final.profit),       hi: false },
+    { label: "CASH GROWTH",     value: fmtPct(path.cashGrowth),            hi: false },
+    { label: "RISK",            value: <RiskBadge score={path.riskScore} />, hi: false },
+  ]
 
   return (
     <div onClick={onClick} style={{
@@ -209,20 +455,15 @@ function StrategyCard({ path, rank, isFront, offset, onClick, onDetail }) {
 
       {/* Metrics */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "18px" }}>
-        {[
-          { label: "FINAL CASH", value: fmtFull(path.final.cash), hi: true },
-          { label: "MONTHLY PROFIT", value: fmt(path.final.profit), hi: false },
-          { label: "CASH CHANGE", value: fmtPct(path.growth), hi: false },
-          { label: "MIN RUNWAY", value: `${path.minRunway.toFixed(1)} mo`, hi: false },
-        ].map(({ label, value, hi }) => (
+        {metrics.map(({ label, value, hi }) => (
           <div key={label} style={{
             padding: "10px 12px",
             background: hi ? accent : "#f8fafc",
             borderRadius: "8px",
             border: `1px solid ${hi ? color + "33" : "#f1f5f9"}`,
           }}>
-            <div style={{ fontSize: "9px", color: "#94a3b8", letterSpacing: "1.5px", marginBottom: "3px", fontFamily: "monospace" }}>{label}</div>
-            <div style={{ fontSize: "17px", fontWeight: "800", color: hi ? color : "#0f172a" }}>{value}</div>
+            <div style={{ fontSize: "9px", color: "#94a3b8", letterSpacing: "1.5px", marginBottom: "4px", fontFamily: "monospace" }}>{label}</div>
+            <div style={{ fontSize: typeof value === "string" ? "17px" : "14px", fontWeight: "800", color: hi ? color : "#0f172a", display: "flex", alignItems: "center" }}>{value}</div>
           </div>
         ))}
       </div>
@@ -292,12 +533,12 @@ function DetailModal({ path, rank, onClose }) {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", padding: "20px 28px", borderBottom: "1px solid #f1f5f9" }}>
           {[
-            { label: "FINAL CASH", value: fmtFull(path.final.cash) },
-            { label: "MONTHLY PROFIT", value: fmtFull(path.final.profit) },
-            { label: "CUSTOMERS/DAY", value: Math.round(path.final.customersServed) },
-            { label: "CASH CHANGE", value: fmtPct(path.growth) },
-            { label: "MIN RUNWAY", value: `${path.minRunway.toFixed(1)} mo` },
-            { label: "BARISTAS", value: path.final.baristas },
+            { label: "FINAL CASH",     value: fmtFull(path.final.cash) },
+            { label: "MONTHLY PROFIT", value: fmtProfit(path.final.profit) },
+            { label: "CASH GROWTH",    value: fmtPct(path.cashGrowth) },
+            { label: "RISK SCORE",     value: `${path.riskScore}/100` },
+            { label: "MIN RUNWAY",     value: `${path.minRunway.toFixed(1)} mo` },
+            { label: "CUSTOMERS/MO",   value: Math.round(path.final.customersServed).toLocaleString() },
           ].map(({ label, value }) => (
             <div key={label} style={{ padding: "12px 14px", background: "#f8fafc", borderRadius: "10px" }}>
               <div style={{ fontSize: "9px", color: "#94a3b8", letterSpacing: "1.5px", marginBottom: "4px", fontFamily: "monospace" }}>{label}</div>
@@ -344,8 +585,8 @@ function DetailModal({ path, rank, onClose }) {
                         {cashDelta >= 0 ? "+" : ""}{fmt(cashDelta)}
                       </div>
                     </td>
-                    <td style={{ padding: "12px 8px 12px 0", color: "#16a34a", fontWeight: "600", whiteSpace: "nowrap" }}>{fmt(node.state.profit)}</td>
-                    <td style={{ padding: "12px 0", color: "#0f172a", whiteSpace: "nowrap" }}>{Math.round(node.state.customersServed)}/day</td>
+                    <td style={{ padding: "12px 8px 12px 0", color: node.state.profit >= 0 ? "#16a34a" : "#ef4444", fontWeight: "600", whiteSpace: "nowrap" }}>{fmtProfit(node.state.profit)}</td>
+                    <td style={{ padding: "12px 0", color: "#0f172a", whiteSpace: "nowrap" }}>{Math.round(node.state.customersServed).toLocaleString()}/mo</td>
                   </tr>
                 )
               })}
@@ -402,9 +643,9 @@ function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
           }}>
             {total > 100 ? `⚠ Total ${total} — reduce weights` : `✓ Total weight: ${total}`}
           </div>
-          <Slider label="FINAL CASH" value={goals.cash} color="#16a34a" onChange={v => setGoals(g => ({ ...g, cash: v }))} />
+          <Slider label="FINAL CASH"     value={goals.cash}   color="#16a34a" onChange={v => setGoals(g => ({ ...g, cash: v }))} />
           <Slider label="MONTHLY PROFIT" value={goals.profit} color="#2563eb" onChange={v => setGoals(g => ({ ...g, profit: v }))} />
-          <Slider label="CUSTOMER GROWTH" value={goals.growth} color="#d97706" onChange={v => setGoals(g => ({ ...g, growth: v }))} />
+          <Slider label="CASH GROWTH"    value={goals.growth} color="#d97706" onChange={v => setGoals(g => ({ ...g, growth: v }))} />
         </div>
 
         <div style={{ height: "1px", background: "#f1f5f9", marginBottom: "24px" }} />
@@ -435,26 +676,40 @@ function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
   )
 }
 
-export default function Results({ result, initialState }) {
+export default function Results({ result, initialState, isLoading }) {
   const [active, setActive] = useState(0)
   const [showGoals, setShowGoals] = useState(false)
   const [detailIndex, setDetailIndex] = useState(null)
   const [goals, setGoals] = useState({ cash: 60, profit: 50, growth: 40 })
   const [risk, setRisk] = useState(40)
   const [ranked, setRanked] = useState([])
+  const [showAnimation, setShowAnimation] = useState(false)
+  const [animDone, setAnimDone] = useState(false)
   const navigate = useNavigate()
 
   const initialCash = initialState?.cash ?? 50000
+
+  // When loading starts, show animation
+  useEffect(() => {
+    if (isLoading) {
+      setShowAnimation(true)
+      setAnimDone(false)
+    }
+  }, [isLoading])
+
+  // When both animation done AND result ready, hide animation
+  const readyToShow = animDone && !isLoading && result
 
   useEffect(() => {
     if (!result?.topPaths) return
     const transformed = result.topPaths.map((p, i) => transformPath(p, i, initialCash))
     const rescored = rescorePaths(transformed, goals, risk)
-    setRanked(rescored)
+    setRanked(rescored.map((p, i) => ({ ...p, id: LABELS[i] })))
     setActive(0)
   }, [result, goals, risk])
 
-  if (!result) return (
+  // No result and not loading
+  if (!result && !isLoading) return (
     <div style={{ minHeight: "calc(100vh - 56px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px", background: "#fafafa" }}>
       <div style={{ fontSize: "14px", color: "#94a3b8", fontFamily: "monospace" }}>No results yet.</div>
       <button onClick={() => navigate("/")} style={{ padding: "10px 24px", background: "#0f172a", border: "none", borderRadius: "8px", color: "white", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "monospace", letterSpacing: "1px" }}>
@@ -462,6 +717,38 @@ export default function Results({ result, initialState }) {
       </button>
     </div>
   )
+
+  // Show animation overlay while loading or animation running
+  if (showAnimation && !readyToShow) {
+    return (
+      <div style={{
+        minHeight: "calc(100vh - 56px)", background: "#0f172a",
+        display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", gap: "24px", padding: "40px 24px",
+      }}>
+        <div style={{ textAlign: "center", marginBottom: "8px" }}>
+          <div style={{ fontSize: "10px", color: "#475569", letterSpacing: "3px", fontFamily: "monospace", marginBottom: "10px" }}>
+            AUGUR ENGINE RUNNING
+          </div>
+          <div style={{ fontSize: "22px", fontWeight: "800", color: "white", letterSpacing: "-0.5px" }}>
+            Searching decision tree...
+          </div>
+        </div>
+        <TreeAnimation onComplete={() => setAnimDone(true)} />
+        {isLoading && (
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            {[0, 1, 2].map(i => (
+              <div key={i} style={{
+                width: 6, height: 6, borderRadius: "50%", background: "#334155",
+                animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+              }} />
+            ))}
+            <style>{`@keyframes pulse { 0%,100%{opacity:0.2;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }`}</style>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const rotate = (dir) => setActive(p => (p + dir + 3) % 3)
   const getOffset = (i) => {
@@ -478,12 +765,12 @@ export default function Results({ result, initialState }) {
 
   return (
     <div style={{ minHeight: "calc(100vh - 56px)", background: "#fafafa", fontFamily: "Georgia, serif" }}>
-      {showGoals && (
+      {showGoals && result && (
         <GoalsPanel
           goals={goals} setGoals={setGoals}
           risk={risk} setRisk={setRisk}
           onClose={() => setShowGoals(false)}
-          pathCount={result.pathsEvaluated}
+          pathCount={result.pathsEvaluated ?? 0}
         />
       )}
       {detailIndex !== null && ranked[detailIndex] && (
@@ -496,7 +783,7 @@ export default function Results({ result, initialState }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "24px" }}>
           <div>
             <div style={{ fontSize: "10px", color: "#94a3b8", letterSpacing: "3px", fontFamily: "monospace", marginBottom: "8px" }}>
-              SIMULATION COMPLETE · {result.pathsEvaluated.toLocaleString()} PATHS EVALUATED
+              SIMULATION COMPLETE · {(result?.pathsEvaluated ?? 0).toLocaleString()} PATHS EVALUATED
             </div>
             <h1 style={{ fontSize: "30px", fontWeight: "800", color: "#0f172a", letterSpacing: "-1px", margin: "0 0 6px", lineHeight: 1.2 }}>Top 3 Strategies</h1>
             <p style={{ fontSize: "13px", color: "#64748b", margin: 0 }}>
@@ -506,16 +793,16 @@ export default function Results({ result, initialState }) {
           </div>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
             {[
-              { label: "Cash", val: goals.cash, color: "#16a34a", bg: "#dcfce7" },
+              { label: "Cash",   val: goals.cash,   color: "#16a34a", bg: "#dcfce7" },
               { label: "Profit", val: goals.profit, color: "#2563eb", bg: "#dbeafe" },
               { label: "Growth", val: goals.growth, color: "#d97706", bg: "#fef3c7" },
               { label: `Risk ${risk < 33 ? "Low" : risk < 66 ? "Med" : "High"}`, val: null, color: "#7c3aed", bg: "#faf5ff" },
             ].map(({ label, val, color, bg }) => (
-              <div key={label} onClick={() => setShowGoals(true)} style={{ padding: "4px 10px", background: bg, borderRadius: "20px", fontSize: "10px", fontWeight: "700", color, cursor: "pointer", fontFamily: "monospace", letterSpacing: "0.5px" }}>
+              <div key={label} onClick={() => result && setShowGoals(true)} style={{ padding: "4px 10px", background: bg, borderRadius: "20px", fontSize: "10px", fontWeight: "700", color, cursor: result ? "pointer" : "default", fontFamily: "monospace", letterSpacing: "0.5px" }}>
                 {label}{val !== null ? ` ${val}` : ""}
               </div>
             ))}
-            <button onClick={() => setShowGoals(true)} style={{ padding: "8px 16px", background: "white", border: "1px solid #e2e8f0", borderRadius: "6px", color: "#0f172a", fontSize: "11px", fontWeight: "600", cursor: "pointer", fontFamily: "monospace" }}>
+            <button onClick={() => result && setShowGoals(true)} style={{ padding: "8px 16px", background: "white", border: "1px solid #e2e8f0", borderRadius: "6px", color: "#0f172a", fontSize: "11px", fontWeight: "600", cursor: result ? "pointer" : "default", fontFamily: "monospace" }}>
               ⚙ Re-rank
             </button>
           </div>
@@ -553,16 +840,16 @@ export default function Results({ result, initialState }) {
                 </div>
               ))}
               {[
-                { label: "Final Cash", get: p => fmtFull(p.final.cash) },
-                { label: "Monthly Profit", get: p => fmtFull(p.final.profit) },
-                { label: "Cash Change", get: p => fmtPct(p.growth) },
-                { label: "Customers/day", get: p => Math.round(p.final.customersServed) },
-                { label: "Min Runway", get: p => `${p.minRunway.toFixed(1)} mo` },
+                { label: "Final Cash",     get: p => fmtFull(p.final.cash) },
+                { label: "Monthly Profit", get: p => fmtProfit(p.final.profit) },
+                { label: "Cash Growth",    get: p => fmtPct(p.cashGrowth) },
+                { label: "Risk",           get: p => <RiskBadge score={p.riskScore} /> },
+                { label: "Customers/mo",   get: p => Math.round(p.final.customersServed).toLocaleString() },
               ].map(({ label, get }) => (
                 <>
                   <div key={label} style={{ fontSize: "11px", color: "#64748b", padding: "10px 0", borderBottom: "1px solid #f8fafc", fontFamily: "monospace" }}>{label}</div>
                   {ranked.map((p, i) => (
-                    <div key={p.id + label} style={{ textAlign: "center", padding: "10px 0", borderBottom: "1px solid #f8fafc", fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                    <div key={p.id + label} style={{ textAlign: "center", padding: "10px 0", borderBottom: "1px solid #f8fafc", fontSize: "13px", fontWeight: "700", color: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {get(p)}
                     </div>
                   ))}
