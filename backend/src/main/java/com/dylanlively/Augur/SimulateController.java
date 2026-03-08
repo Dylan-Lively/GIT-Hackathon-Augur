@@ -1,16 +1,24 @@
 package com.dylanlively.Augur;
 
+import com.dylanlively.Augur.engine.*;
+import com.dylanlively.Augur.model.*;
 import org.springframework.web.bind.annotation.*;
-import java.util.Map;
 
 @RestController
 @CrossOrigin(origins = "*")
 public class SimulateController {
 
+    private final SimulationEngine engine;
+
+    public SimulateController() {
+        StateEngine stateEngine = new StateEngine();
+        MoveApplier moveApplier = new MoveApplier(stateEngine);
+        Scorer scorer = new Scorer();
+        this.engine = new SimulationEngine(stateEngine, moveApplier, scorer);
+    }
+
     @PostMapping("/simulate")
-    public Map<String, Object> simulate(@RequestBody Map<String, Object> request) {
-        String preset = (String) request.get("preset");
-        System.out.println("Running simulation for: " + preset);
-        return Map.of("status", "ok", "preset", preset);
+    public SimulationResult simulate(@RequestBody SimulationRequest request) {
+        return engine.run(request);
     }
 }
