@@ -4,42 +4,34 @@ const GENERATE_STATUS = {
     idle: "idle",
     loading: "loading",
     success: "success",
+    error: "error",
 };
 
 export default function MainPage({ onGenerate }) {
-
     const [status, setStatus] = useState(GENERATE_STATUS.idle);
-    const [result, setResult] = useState(null);
+    const [errorMsg, setErrorMsg] = useState("");
 
     const handleGenerate = async () => {
         setStatus(GENERATE_STATUS.loading);
-        setResult(null);
+        setErrorMsg("");
         try {
-            const data = await onGenerate();
-            setResult(data);
+            await onGenerate();
             setStatus(GENERATE_STATUS.success);
         } catch (err) {
+            setErrorMsg(err.message);
+            setStatus(GENERATE_STATUS.error);
         }
     };
 
     return (
-        <>
-            {status === GENERATE_STATUS.success && result && (
-                <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm overflow-hidden">
-                    <div className="px-6 py-4 border-b border-[#E2E8F0]">
-                        <h2 className="text-[#0F172A] text-sm font-semibold uppercase tracking-widest">Result</h2>
-                    </div>
-                    <pre className="p-6 text-xs text-[#475569] overflow-auto">
-                        {JSON.stringify(result, null, 2)}
-                    </pre>
-                </div>
-            )}
+        <div className="min-h-screen bg-[#F1F3F5] flex flex-col items-center py-12 px-6 gap-8">
 
-            <div className="flex justify-center mg-top-500">
+            {/* Generate Button */}
+            <div className="flex justify-center">
                 <button
                     onClick={handleGenerate}
                     disabled={status === GENERATE_STATUS.loading}
-                    className={`px-6 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200
+                    className={`px-12 py-5 rounded-lg text-lg font-semibold transition-all duration-200
                         ${status === GENERATE_STATUS.loading
                             ? "bg-[#2563EB] text-white opacity-70 cursor-wait"
                             : status === GENERATE_STATUS.success
@@ -49,9 +41,18 @@ export default function MainPage({ onGenerate }) {
                 >
                     {status === GENERATE_STATUS.loading && "Generating…"}
                     {status === GENERATE_STATUS.success && "Generated"}
+                    {status === GENERATE_STATUS.error && "Retry"}
                     {status === GENERATE_STATUS.idle && "Generate"}
                 </button>
             </div>
-        </>
+
+            {/* Error */}
+            {status === GENERATE_STATUS.error && (
+                <div className="w-full max-w-4xl bg-[#FEF2F2] border border-[#FECACA] text-[#DC2626] text-sm px-4 py-3 rounded-lg">
+                    ⚠ {errorMsg || "Something went wrong. Please try again."}
+                </div>
+            )}
+
+        </div>
     );
 }
