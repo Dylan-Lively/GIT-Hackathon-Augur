@@ -1,8 +1,6 @@
+import { memo } from "react";
 
-import { useState } from "react";
-
-
-export default function Settings({ config, onChange }) {
+function Settings({ config, onChange }) {
 
   const handleChange = (key, value) => {
     onChange({ ...config, [key]: value });
@@ -43,5 +41,7 @@ export default function Settings({ config, onChange }) {
 
       </div>
     </div>
-    )
+  );
 }
+
+export default memo(Settings);

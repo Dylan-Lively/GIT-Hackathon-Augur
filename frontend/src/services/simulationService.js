@@ -1,14 +1,15 @@
 // simulationService.js
 // Central place to define ALL request shapes and API calls.
-// Share this file with your teammate so you're always in sync.
+// Backend: POST /simulate expects { preset, allowedMoves, state1..state8, ... }
 
 const BASE_URL = "http://localhost:8080";
-const MOCK_MODE = true; // flip to false when backend is ready
+const MOCK_MODE = true; // true = use mock; false = call real backend
 
 // ─── Mock Responses ───────────────────────────────────────────────────────────
 const MOCK_RESPONSES = {
-  generate: {
-    status: "success",
+  simulate: {
+    status: "ok",
+    preset: null,
     result: {
       score: 87,
       summary: "Mock simulation result",
@@ -22,7 +23,8 @@ async function post(path, body) {
   if (MOCK_MODE) {
     console.log("[MOCK] POST", path, JSON.stringify(body, null, 2));
     await new Promise((r) => setTimeout(r, 600));
-    return MOCK_RESPONSES[path.replace("/", "")] ?? { status: "error", message: "No mock for " + path };
+    const key = path.replace("/", "");
+    return MOCK_RESPONSES[key] ?? { status: "error", message: "No mock for " + path };
   }
 
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -41,8 +43,9 @@ async function post(path, body) {
 
 // ─── API Calls ────────────────────────────────────────────────────────────────
 export const simulationService = {
-  // Single generate call — sends everything to POST /generate
-  // Shape: { preset, allowedMoves, ...mainFeatures }
-  // Add more fields to the payload in App.jsx as you build MainPage features
-  generate: (payload) => post("/generate", payload),
+  /**
+   * Sends full simulation payload to backend POST /simulate.
+   * Payload: { preset, allowedMoves, state1, state2, ..., state8 }
+   */
+  simulate: (payload) => post("/simulate", payload),
 };

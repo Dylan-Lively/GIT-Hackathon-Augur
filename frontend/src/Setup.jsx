@@ -1,3 +1,4 @@
+import { memo } from "react";
 
 const PRESETS = [
     { id: "coffee-shop", label: "Coffee Shop", description: "Small family-owned cafe" },
@@ -21,7 +22,7 @@ const MOVES = [
     { id: "move10", label: "Move 10", description: "Description" },
 ];
 
-export default function Setup({ config, onChange }) {
+function Setup({ config, onChange }) {
     const { preset: selectedPreset, moves: selectedMoves } = config;
 
     const handlePreset = (id) => {
@@ -116,3 +117,5 @@ export default function Setup({ config, onChange }) {
         </div>
     );
 }
+
+export default memo(Setup);
