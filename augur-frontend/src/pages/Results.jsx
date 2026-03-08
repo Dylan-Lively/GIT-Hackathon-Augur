@@ -70,140 +70,140 @@ function TreeAnimation({ onComplete }) {
     const W = canvas.width, H = canvas.height
     const cx = W / 2
 
-    // Light theme matching results page
-    const BG         = "#ffffff"
-    const EDGE_DIM   = "#e2e8f0"
-    const NODE_DIM   = "#cbd5e1"
-    const NODE_ROOT  = "#0f172a"
-    const TEXT_DIM   = "#94a3b8"
-    const TEXT_COUNT = "#64748b"
-    const PATH_COLORS = ["#16a34a", "#2563eb", "#d97706"]
+    const BG          = "#ffffff"
+    const EDGE_DIM    = "#e2e8f0"
+    const NODE_DIM    = "#cbd5e1"
+    const PATH_COLORS  = ["#16a34a", "#2563eb", "#d97706"]
     const PATH_ACCENTS = ["#dcfce7", "#dbeafe", "#fef3c7"]
 
-    // ── 5-layer tree layout ──────────────────────────────────────────────
+    // ── Build tree: 7 layers, straight lines, hand-tuned x positions ─────
+    // Each layer: array of {x, y, id}
+    const Y = [38, 108, 182, 258, 334, 410, 478]
+
     // L0: root
-    const L0 = [{ x: cx, y: 44, id: 0 }]
+    const L0 = [{ x: cx, y: Y[0], id: 0 }]
 
-    // L1: 5 children
-    const L1 = [-340, -170, 0, 170, 340].map((dx, i) => ({ x: cx + dx, y: 128, id: 1 + i }))
+    // L1: 5 nodes
+    const L1 = [-460, -220, 0, 220, 460].map((dx, i) => ({ x: cx+dx, y: Y[1], id: 1+i }))
 
-    // L2: 10 nodes, 2 per L1 node
-    const L2 = [
-      cx - 390, cx - 290, cx - 200, cx - 120, cx - 40,
-      cx + 40,  cx + 120, cx + 200, cx + 290, cx + 390,
-    ].map((x, i) => ({ x, y: 218, id: 6 + i }))
+    // L2: 12 nodes (~2-3 per L1)
+    const L2xs = [-500,-390,-285,-195,-105,-30, 30, 105, 195, 285, 390, 500]
+    const L2 = L2xs.map((dx, i) => ({ x: cx+dx, y: Y[2], id: 6+i }))
 
-    // L3: 16 nodes (some L2 get 2, some 1)
-    const L3xs = [
-      cx - 420, cx - 360, cx - 295, cx - 230,
-      cx - 165, cx - 95,  cx - 30,  cx + 30,
-      cx + 95,  cx + 165, cx + 230, cx + 295,
-      cx + 360, cx + 420, cx + 470, cx - 470,
-    ]
-    const L3 = L3xs.map((x, i) => ({ x, y: 308, id: 16 + i }))
+    // L3: 22 nodes
+    const L3xs = [-510,-455,-395,-335,-278,-222,-168,-112,-60,-18, 18, 60, 112, 168, 222, 278, 335, 395, 455, 505, -525, 525]
+    const L3 = L3xs.map((dx, i) => ({ x: cx+dx, y: Y[3], id: 18+i }))
 
-    // L4: 20 leaf nodes
+    // L4: 32 nodes
     const L4xs = [
-      cx - 450, cx - 410, cx - 365, cx - 320, cx - 275,
-      cx - 225, cx - 175, cx - 125, cx - 75,  cx - 25,
-      cx + 25,  cx + 75,  cx + 125, cx + 175, cx + 225,
-      cx + 275, cx + 325, cx + 375, cx + 415, cx + 455,
+      -515,-483,-450,-416,-382,-347,-312,-276,-240,-204,
+      -168,-132,-96,-60,-28, 0, 28, 60, 96, 132,
+       168, 204, 240, 276, 312, 347, 382, 416, 450, 483, 515, -530
     ]
-    const L4 = L4xs.map((x, i) => ({ x, y: 398, id: 32 + i }))
+    const L4 = L4xs.map((dx, i) => ({ x: cx+dx, y: Y[4], id: 40+i }))
 
-    const allNodes = [...L0, ...L1, ...L2, ...L3, ...L4]
+    // L5: 38 nodes
+    const L5xs = [
+      -518,-494,-468,-442,-415,-388,-360,-332,-304,-276,
+      -248,-220,-192,-164,-136,-108,-80,-52,-26, 0,
+       26,  52,  80, 108, 136, 164, 192, 220, 248, 276,
+       304, 332, 360, 388, 415, 442, 468, 494
+    ]
+    const L5 = L5xs.map((dx, i) => ({ x: cx+dx, y: Y[5], id: 72+i }))
 
-    // ── Edges ────────────────────────────────────────────────────────────
+    // L6: 44 leaf nodes
+    const L6xs = [
+      -520,-500,-478,-456,-434,-412,-390,-368,-346,-324,
+      -302,-280,-258,-236,-214,-192,-170,-148,-126,-104,
+      -82, -60, -38, -16,  0,  16,  38,  60,  82, 104,
+       126, 148, 170, 192, 214, 236, 258, 280, 302, 324,
+       346, 368, 390, 412
+    ]
+    const L6 = L6xs.map((dx, i) => ({ x: cx+dx, y: Y[6], id: 110+i }))
+
+    const layers = [L0, L1, L2, L3, L4, L5, L6]
+    const allNodes = layers.flat()
+
+    // ── Edges: connect each node to nearest parent in layer above ─────────
+    const buildEdges = (upper, lower) => lower.map(n => {
+      const parent = upper.reduce((a, b) =>
+        Math.abs(a.x - n.x) < Math.abs(b.x - n.x) ? a : b
+      )
+      return { from: parent, to: n }
+    })
+
     const allEdges = [
-      // L0 → L1
-      ...L1.map(n => ({ from: L0[0], to: n })),
-      // L1 → L2 (each L1 gets 2 L2 children)
-      { from: L1[0], to: L2[0] }, { from: L1[0], to: L2[1] },
-      { from: L1[1], to: L2[2] }, { from: L1[1], to: L2[3] },
-      { from: L1[2], to: L2[4] }, { from: L1[2], to: L2[5] },
-      { from: L1[3], to: L2[6] }, { from: L1[3], to: L2[7] },
-      { from: L1[4], to: L2[8] }, { from: L1[4], to: L2[9] },
-      // L2 → L3 (mixed 1 or 2 children)
-      { from: L2[0], to: L3[0]  }, { from: L2[0],  to: L3[15] },
-      { from: L2[1], to: L3[1]  }, { from: L2[1],  to: L3[2]  },
-      { from: L2[2], to: L3[3]  },
-      { from: L2[3], to: L3[4]  }, { from: L2[3],  to: L3[5]  },
-      { from: L2[4], to: L3[6]  },
-      { from: L2[5], to: L3[7]  }, { from: L2[5],  to: L3[8]  },
-      { from: L2[6], to: L3[9]  },
-      { from: L2[7], to: L3[10] }, { from: L2[7], to: L3[11] },
-      { from: L2[8], to: L3[12] },
-      { from: L2[9], to: L3[13] }, { from: L2[9], to: L3[14] },
-      // L3 → L4 (roughly 1-2 children each)
-      { from: L3[0],  to: L4[0]  }, { from: L3[0],  to: L4[1]  },
-      { from: L3[1],  to: L4[2]  },
-      { from: L3[2],  to: L4[3]  }, { from: L3[2],  to: L4[4]  },
-      { from: L3[3],  to: L4[5]  },
-      { from: L3[4],  to: L4[6]  }, { from: L3[4],  to: L4[7]  },
-      { from: L3[5],  to: L4[8]  },
-      { from: L3[6],  to: L4[9]  }, { from: L3[6],  to: L4[10] },
-      { from: L3[7],  to: L4[11] },
-      { from: L3[8],  to: L4[12] }, { from: L3[8],  to: L4[13] },
-      { from: L3[9],  to: L4[14] },
-      { from: L3[10], to: L4[15] }, { from: L3[10], to: L4[16] },
-      { from: L3[11], to: L4[17] },
-      { from: L3[12], to: L4[18] },
-      { from: L3[13], to: L4[19] },
-      { from: L3[14], to: L4[18] },
-      { from: L3[15], to: L4[0]  },
+      ...buildEdges(L0, L1),
+      ...buildEdges(L1, L2),
+      ...buildEdges(L2, L3),
+      ...buildEdges(L3, L4),
+      ...buildEdges(L4, L5),
+      ...buildEdges(L5, L6),
     ]
 
-    // ── 3 highlighted paths (one per strategy color) ──────────────────
-    const highlightPaths = [
-      [L0[0], L1[0], L2[1], L3[2],  L4[4]  ], // green  – Strategy A
-      [L0[0], L1[2], L2[4], L3[6],  L4[9]  ], // blue   – Strategy B
-      [L0[0], L1[4], L2[9], L3[13], L4[19] ], // amber  – Strategy C
-    ]
-
-    let startTime = null
-    const TOTAL = 3600
-
-    function easeOut(t) { return 1 - Math.pow(1 - t, 3) }
-    function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t }
-
-    function nodeRadius(n) {
-      if (n.id === 0) return 9
-      if (n.id <= 5)  return 6
-      return 4.5
+    // ── 3 highlight paths: left, center, right ───────────────────────────
+    const pickPath = (targetX) => {
+      const path = [L0[0]]
+      layers.slice(1).forEach(layer => {
+        const prev = path[path.length - 1]
+        // Pick child closest to targetX but biased toward prev.x for continuity
+        const best = layer.reduce((a, b) => {
+          const da = Math.abs(a.x - targetX) * 0.6 + Math.abs(a.x - prev.x) * 0.4
+          const db = Math.abs(b.x - targetX) * 0.6 + Math.abs(b.x - prev.x) * 0.4
+          return da < db ? a : b
+        })
+        path.push(best)
+      })
+      return path
     }
+
+    const highlightPaths = [
+      pickPath(cx - 380), // green  – Strategy A (left)
+      pickPath(cx),       // blue   – Strategy B (center)
+      pickPath(cx + 380), // amber  – Strategy C (right)
+    ]
+
+    // ── Node radius by layer ──────────────────────────────────────────────
+    const nodeR = n => {
+      const li = layers.findIndex(l => l.includes(n))
+      if (li === 0) return 8
+      if (li === 1) return 6
+      if (li === 2) return 5
+      if (li === 3) return 4
+      return 3
+    }
+
+    const easeOut   = t => 1 - Math.pow(1 - t, 3)
+    const easeInOut = t => t < 0.5 ? 2*t*t : -1+(4-2*t)*t
+
+    const TOTAL = 3800
+    let startTime = null
 
     function draw(ts) {
       if (!startTime) startTime = ts
       const raw = Math.min((ts - startTime) / TOTAL, 1)
 
-      // White card background
       ctx.fillStyle = BG
       ctx.fillRect(0, 0, W, H)
 
-      // Subtle grid dots for texture (matches results page card feel)
+      // Dot grid
       ctx.fillStyle = "#f1f5f9"
-      for (let gx = 20; gx < W; gx += 28) {
-        for (let gy = 20; gy < H; gy += 28) {
-          ctx.beginPath()
-          ctx.arc(gx, gy, 1, 0, Math.PI * 2)
-          ctx.fill()
+      for (let gx = 20; gx < W; gx += 26) {
+        for (let gy = 20; gy < H; gy += 26) {
+          ctx.beginPath(); ctx.arc(gx, gy, 0.9, 0, Math.PI * 2); ctx.fill()
         }
       }
 
-      const buildEnd   = 0.52
-      const selectStart = 0.58
+      const buildEnd    = 0.54
+      const selectStart = 0.60
 
       if (raw < buildEnd) {
-        // ── Phase 1: build tree left-to-right, layer by layer ──────────
-        const progress = easeOut(raw / buildEnd)
-        const layers = [L0, L1, L2, L3, L4]
-        const totalEdges = allEdges.length
-        const totalNodes = allNodes.length
-        const totalItems = totalEdges + totalNodes
-        const revealed = Math.floor(progress * totalItems)
+        // ── Phase 1: build tree layer by layer ───────────────────────
+        const p = easeOut(raw / buildEnd)
+        const totalItems = allEdges.length + allNodes.length
+        const revealed   = Math.floor(p * totalItems)
 
-        // Edges first (drawn behind nodes)
-        allEdges.slice(0, Math.max(0, revealed)).forEach(e => {
+        allEdges.slice(0, Math.max(0, revealed - allNodes.length)).forEach(e => {
           ctx.beginPath()
           ctx.moveTo(e.from.x, e.from.y)
           ctx.lineTo(e.to.x, e.to.y)
@@ -212,32 +212,27 @@ function TreeAnimation({ onComplete }) {
           ctx.stroke()
         })
 
-        // Nodes
-        allNodes.slice(0, Math.min(revealed, totalNodes)).forEach(n => {
-          const r = nodeRadius(n)
-          // White fill with border (matches card style)
-          ctx.beginPath()
-          ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-          ctx.fillStyle = n.id === 0 ? NODE_ROOT : "white"
-          ctx.fill()
-          ctx.strokeStyle = n.id === 0 ? NODE_ROOT : NODE_DIM
-          ctx.lineWidth = n.id === 0 ? 0 : 1.5
-          ctx.stroke()
+        allNodes.slice(0, Math.min(revealed, allNodes.length)).forEach(n => {
+          const r = nodeR(n)
+          ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+          if (n.id === 0) {
+            ctx.fillStyle = "#0f172a"; ctx.fill()
+          } else {
+            ctx.fillStyle = "white"; ctx.fill()
+            ctx.strokeStyle = NODE_DIM; ctx.lineWidth = 1.5; ctx.stroke()
+          }
         })
 
-        // Animated counter
-        const pathCount = Math.floor(progress * 7654)
-        ctx.fillStyle = TEXT_COUNT
+        const pathCount = Math.floor(p * 7654)
+        ctx.fillStyle = "#94a3b8"
         ctx.font = "600 12px monospace"
         ctx.textAlign = "center"
-        ctx.fillText(`evaluating ${pathCount.toLocaleString()} paths...`, cx, H - 20)
+        ctx.fillText(`${pathCount.toLocaleString()} paths evaluated...`, cx, H - 18)
 
       } else {
-        // ── Phase 2: dim everything, then illuminate 3 paths ───────────
-        const selectProgress = Math.min((raw - selectStart) / (1 - selectStart), 1)
-        const sp = easeInOut(selectProgress)
+        // ── Phase 2: dim all, highlight 3 paths ──────────────────────
+        const sp = easeInOut(Math.min((raw - selectStart) / (1 - selectStart), 1))
 
-        // Draw all dim edges
         allEdges.forEach(e => {
           ctx.beginPath()
           ctx.moveTo(e.from.x, e.from.y)
@@ -247,36 +242,28 @@ function TreeAnimation({ onComplete }) {
           ctx.stroke()
         })
 
-        // Draw all dim nodes
         allNodes.forEach(n => {
-          const r = nodeRadius(n)
-          ctx.beginPath()
-          ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-          ctx.fillStyle = "#f8fafc"
-          ctx.fill()
-          ctx.strokeStyle = "#e2e8f0"
-          ctx.lineWidth = 1.5
-          ctx.stroke()
+          const r = nodeR(n)
+          ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+          ctx.fillStyle = "#f8fafc"; ctx.fill()
+          ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 1.5; ctx.stroke()
         })
 
-        // Highlight each path with staggered timing
         highlightPaths.forEach((path, pi) => {
-          const delay  = pi * 0.22
-          const pp     = Math.max(0, Math.min((sp - delay) / 0.5, 1))
+          const delay = pi * 0.18
+          const pp    = Math.max(0, Math.min((sp - delay) / 0.45, 1))
           if (pp <= 0) return
 
           const color  = PATH_COLORS[pi]
           const accent = PATH_ACCENTS[pi]
 
-          // Glowing edges along path
           for (let i = 0; i < path.length - 1; i++) {
-            const segP = Math.min(Math.max((pp - i * 0.2) / 0.3, 0), 1)
+            const segP = Math.min(Math.max((pp - i * 0.14) / 0.22, 0), 1)
             if (segP <= 0) continue
             const from = path[i], to = path[i + 1]
             const ex = from.x + (to.x - from.x) * segP
             const ey = from.y + (to.y - from.y) * segP
 
-            // Soft glow underneath
             ctx.beginPath()
             ctx.moveTo(from.x, from.y)
             ctx.lineTo(ex, ey)
@@ -284,7 +271,6 @@ function TreeAnimation({ onComplete }) {
             ctx.lineWidth = 7
             ctx.stroke()
 
-            // Crisp colored edge on top
             ctx.beginPath()
             ctx.moveTo(from.x, from.y)
             ctx.lineTo(ex, ey)
@@ -293,59 +279,44 @@ function TreeAnimation({ onComplete }) {
             ctx.stroke()
           }
 
-          // Highlighted nodes along path
           path.forEach((n, ni) => {
-            const np = Math.min(Math.max((pp - ni * 0.18) / 0.25, 0), 1)
+            const np = Math.min(Math.max((pp - ni * 0.12) / 0.2, 0), 1)
             if (np <= 0) return
-            const r = (nodeRadius(n) + 2) * np
-            // Accent fill (matches card accent colors)
-            ctx.beginPath()
-            ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2)
-            ctx.fillStyle = accent
-            ctx.fill()
-            ctx.beginPath()
-            ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-            ctx.fillStyle = color
-            ctx.fill()
+            const r = nodeR(n)
+
+            ctx.beginPath(); ctx.arc(n.x, n.y, (r + 4) * np, 0, Math.PI * 2)
+            ctx.fillStyle = accent; ctx.fill()
+
+            ctx.beginPath(); ctx.arc(n.x, n.y, r * np, 0, Math.PI * 2)
+            ctx.fillStyle = color; ctx.fill()
           })
         })
 
-        // Strategy labels on terminal nodes
-        if (sp > 0.80) {
-          const alpha = Math.min((sp - 0.80) / 0.20, 1)
+        if (sp > 0.85) {
+          const alpha = (sp - 0.85) / 0.15
           highlightPaths.forEach((path, pi) => {
             const end   = path[path.length - 1]
             const color = PATH_COLORS[pi]
             const accent = PATH_ACCENTS[pi]
-
             ctx.globalAlpha = alpha
-
-            // Pill badge (matches ranked badge style)
-            const label = `Strategy ${String.fromCharCode(65 + pi)}`
             ctx.font = "700 10px monospace"
+            const label = `Strategy ${String.fromCharCode(65 + pi)}`
             const tw = ctx.measureText(label).width
-            const bw = tw + 16, bh = 18, bx = end.x - bw / 2, by = end.y + 13
-
+            const bw = tw + 16, bh = 18, bx = end.x - bw/2, by = end.y + nodeR(end) + 5
             ctx.fillStyle = accent
-            ctx.beginPath()
-            ctx.roundRect(bx, by, bw, bh, 9)
-            ctx.fill()
-
+            ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 9); ctx.fill()
             ctx.fillStyle = color
             ctx.textAlign = "center"
             ctx.fillText(label, end.x, by + 13)
-
             ctx.globalAlpha = 1
           })
         }
 
-        // Bottom status line
-        const statusAlpha = Math.min(sp * 3, 1)
-        ctx.globalAlpha = statusAlpha
-        ctx.fillStyle = TEXT_COUNT
+        ctx.globalAlpha = Math.min(sp * 3, 1)
+        ctx.fillStyle = "#64748b"
         ctx.font = "600 12px monospace"
         ctx.textAlign = "center"
-        ctx.fillText("7,654 paths evaluated · top 3 strategies selected", cx, H - 20)
+        ctx.fillText("7,654 paths evaluated · top 3 selected", cx, H - 18)
         ctx.globalAlpha = 1
       }
 
@@ -363,9 +334,9 @@ function TreeAnimation({ onComplete }) {
   return (
     <canvas
       ref={canvasRef}
-      width={980}
-      height={460}
-      style={{ width: "100%", maxWidth: 980, borderRadius: 12, display: "block" }}
+      width={1060}
+      height={520}
+      style={{ width: "100%", maxWidth: 1060, borderRadius: 10, display: "block" }}
     />
   )
 }
