@@ -76,92 +76,117 @@ function TreeAnimation({ onComplete }) {
     const PATH_COLORS  = ["#16a34a", "#2563eb", "#d97706"]
     const PATH_ACCENTS = ["#dcfce7", "#dbeafe", "#fef3c7"]
 
-    // ── Build tree: 7 layers, straight lines, hand-tuned x positions ─────
-    // Each layer: array of {x, y, id}
-    const Y = [38, 108, 182, 258, 334, 410, 478]
+    // ── Seeded PRNG ───────────────────────────────────────────────────────
+    let seed = 91
+    const rand   = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0xffffffff }
+    const randIn = (lo, hi) => lo + rand() * (hi - lo)
 
-    // L0: root
-    const L0 = [{ x: cx, y: Y[0], id: 0 }]
+    // ── Layout constants ──────────────────────────────────────────────────
+    const Y       = [36, 104, 174, 244, 314, 382, 446]
+    const MARGIN  = 20
+    const MIN_GAP = 24
 
-    // L1: 5 nodes
-    const L1 = [-460, -220, 0, 220, 460].map((dx, i) => ({ x: cx+dx, y: Y[1], id: 1+i }))
+    let idCounter = 0
+    const layers  = []
 
-    // L2: 12 nodes (~2-3 per L1)
-    const L2xs = [-500,-390,-285,-195,-105,-30, 30, 105, 195, 285, 390, 500]
-    const L2 = L2xs.map((dx, i) => ({ x: cx+dx, y: Y[2], id: 6+i }))
+    const makeNode = (x, y) => ({ x, y, id: idCounter++, children: [] })
 
-    // L3: 22 nodes
-    const L3xs = [-510,-455,-395,-335,-278,-222,-168,-112,-60,-18, 18, 60, 112, 168, 222, 278, 335, 395, 455, 505, -525, 525]
-    const L3 = L3xs.map((dx, i) => ({ x: cx+dx, y: Y[3], id: 18+i }))
+    // Root
+    const root = makeNode(cx, Y[0])
+    layers.push([root])
 
-    // L4: 32 nodes
-    const L4xs = [
-      -515,-483,-450,-416,-382,-347,-312,-276,-240,-204,
-      -168,-132,-96,-60,-28, 0, 28, 60, 96, 132,
-       168, 204, 240, 276, 312, 347, 382, 416, 450, 483, 515, -530
+    // L1: 4 well-spaced children
+    const L1 = [-330, -110, 110, 330].map(dx => {
+      const n = makeNode(cx + dx + randIn(-10, 10), Y[1])
+      root.children.push(n)
+      return n
+    })
+    layers.push(L1)
+
+    // Branching probabilities per layer (1, 2, or 3 children)
+    const BRANCHING = [
+      [0.10, 0.55, 0.35], // L2
+      [0.20, 0.55, 0.25], // L3
+      [0.35, 0.50, 0.15], // L4
+      [0.50, 0.42, 0.08], // L5
+      [0.65, 0.32, 0.03], // L6
     ]
-    const L4 = L4xs.map((dx, i) => ({ x: cx+dx, y: Y[4], id: 40+i }))
+    const FAN = [0, 0, 64, 48, 34, 22, 14]
 
-    // L5: 38 nodes
-    const L5xs = [
-      -518,-494,-468,-442,-415,-388,-360,-332,-304,-276,
-      -248,-220,-192,-164,-136,-108,-80,-52,-26, 0,
-       26,  52,  80, 108, 136, 164, 192, 220, 248, 276,
-       304, 332, 360, 388, 415, 442, 468, 494
-    ]
-    const L5 = L5xs.map((dx, i) => ({ x: cx+dx, y: Y[5], id: 72+i }))
+    for (let li = 2; li < 7; li++) {
+      const parents = layers[li - 1]
+      const bw      = BRANCHING[li - 2]
+      const fan     = FAN[li]
+      const raw     = []
 
-    // L6: 44 leaf nodes
-    const L6xs = [
-      -520,-500,-478,-456,-434,-412,-390,-368,-346,-324,
-      -302,-280,-258,-236,-214,-192,-170,-148,-126,-104,
-      -82, -60, -38, -16,  0,  16,  38,  60,  82, 104,
-       126, 148, 170, 192, 214, 236, 258, 280, 302, 324,
-       346, 368, 390, 412
-    ]
-    const L6 = L6xs.map((dx, i) => ({ x: cx+dx, y: Y[6], id: 110+i }))
+      parents.forEach(parent => {
+        const r     = rand()
+        const count = r < bw[0] ? 1 : r < bw[0] + bw[1] ? 2 : 3
 
-    const layers = [L0, L1, L2, L3, L4, L5, L6]
+        for (let c = 0; c < count; c++) {
+          const t    = count === 1 ? 0 : (c / (count - 1)) - 0.5
+          const drift = count === 1 ? randIn(-fan * 0.7, fan * 0.7) : randIn(-6, 6)
+          const x    = parent.x + t * fan * 2 + drift
+          const n    = makeNode(x, Y[li])
+          parent.children.push(n)
+          raw.push(n)
+        }
+      })
+
+      // Sort, de-overlap, clamp — bidirectional pass
+      raw.sort((a, b) => a.x - b.x)
+      for (let i = 1; i < raw.length; i++) {
+        if (raw[i].x < raw[i-1].x + MIN_GAP) raw[i].x = raw[i-1].x + MIN_GAP
+      }
+      for (let i = raw.length - 2; i >= 0; i--) {
+        if (raw[i].x > raw[i+1].x - MIN_GAP) raw[i].x = raw[i+1].x - MIN_GAP
+      }
+      // Re-center the layer if it drifted
+      const lMin = raw[0].x, lMax = raw[raw.length - 1].x
+      const lCx  = (lMin + lMax) / 2
+      const shift = cx - lCx
+      // Only nudge toward center gently (don't force center)
+      raw.forEach(n => {
+        n.x = Math.max(MARGIN, Math.min(W - MARGIN, n.x + shift * 0.2))
+      })
+
+      layers.push(raw)
+    }
+
     const allNodes = layers.flat()
 
-    // ── Edges: connect each node to nearest parent in layer above ─────────
-    const buildEdges = (upper, lower) => lower.map(n => {
-      const parent = upper.reduce((a, b) =>
-        Math.abs(a.x - n.x) < Math.abs(b.x - n.x) ? a : b
-      )
-      return { from: parent, to: n }
-    })
+    // ── Edges ─────────────────────────────────────────────────────────────
+    const allEdges = []
+    allNodes.forEach(p => p.children.forEach(c => allEdges.push({ from: p, to: c })))
 
-    const allEdges = [
-      ...buildEdges(L0, L1),
-      ...buildEdges(L1, L2),
-      ...buildEdges(L2, L3),
-      ...buildEdges(L3, L4),
-      ...buildEdges(L4, L5),
-      ...buildEdges(L5, L6),
+    // ── 3 highlight paths: left third, center, right third ───────────────
+    // Each path stays in its own horizontal band and zigzags within it
+    // Band centers at each layer
+    const BANDS = [
+      // green: left — alternates left-of-center and slightly right within left half
+      (li) => cx - 280 + Math.sin(li * 2.2) * 120,
+      // blue: center — tight weave around middle
+      (li) => cx + Math.sin(li * 1.7 + 1.0) * 80,
+      // amber: right — alternates right-of-center
+      (li) => cx + 280 + Math.sin(li * 2.2 + Math.PI) * 120,
     ]
 
-    // ── 3 highlight paths: left, center, right ───────────────────────────
-    const pickPath = (targetX) => {
-      const path = [L0[0]]
-      layers.slice(1).forEach(layer => {
-        const prev = path[path.length - 1]
-        // Pick child closest to targetX but biased toward prev.x for continuity
-        const best = layer.reduce((a, b) => {
-          const da = Math.abs(a.x - targetX) * 0.6 + Math.abs(a.x - prev.x) * 0.4
-          const db = Math.abs(b.x - targetX) * 0.6 + Math.abs(b.x - prev.x) * 0.4
-          return da < db ? a : b
-        })
+    const pickPath = (bandFn) => {
+      const path = [root]
+      for (let li = 1; li < layers.length; li++) {
+        const prev   = path[path.length - 1]
+        const target = bandFn(li)
+        // prefer actual children, else whole layer
+        const pool   = prev.children.length ? prev.children : layers[li]
+        const best   = pool.reduce((a, b) =>
+          Math.abs(a.x - target) < Math.abs(b.x - target) ? a : b
+        )
         path.push(best)
-      })
+      }
       return path
     }
 
-    const highlightPaths = [
-      pickPath(cx - 380), // green  – Strategy A (left)
-      pickPath(cx),       // blue   – Strategy B (center)
-      pickPath(cx + 380), // amber  – Strategy C (right)
-    ]
+    const highlightPaths = BANDS.map(pickPath)
 
     // ── Node radius by layer ──────────────────────────────────────────────
     const nodeR = n => {
