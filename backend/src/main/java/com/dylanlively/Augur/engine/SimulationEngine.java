@@ -57,25 +57,29 @@ public class SimulationEngine {
         int beamWidth,
         ScoringWeights weights
     ) {
+
+        // compute derived FIRST before any checks
+        CoffeeShopState current = stateEngine.computeDerived(state);
+
         // pruning 1 — bankrupt
-        if (state.getRunway() <= 0) return;
+        if (current.getRunway() <= 0) return;
 
         // pruning 2 — hit horizon, score and save
-        if (state.getMonthsElapsed() >= horizon) {
-            savePath(state, currentNodes, results, weights);
+        if (current.getMonthsElapsed() >= horizon) {
+            savePath(current, currentNodes, results, weights);
             return;
         }
 
         // get all affordable combos
         List<List<Move>> combinations = getCombinations(availableMoves, maxCombos)
             .stream()
-            .filter(combo -> moveApplier.canAfford(state, combo))
+            .filter(combo -> moveApplier.canAfford(current, combo))
             .collect(Collectors.toList());
 
         // pruning 3 — no valid moves, coast to horizon
         if (combinations.isEmpty()) {
-            double remaining = horizon - state.getMonthsElapsed();
-            CoffeeShopState finalState = stateEngine.timeStep(state, remaining);
+            double remaining = horizon - current.getMonthsElapsed();
+            CoffeeShopState finalState = stateEngine.timeStep(current, remaining);
             savePath(finalState, currentNodes, results, weights);
             return;
         }
@@ -84,8 +88,8 @@ public class SimulationEngine {
         if (combinations.size() > beamWidth) {
             combinations = combinations.stream()
                 .sorted((a, b) -> Double.compare(
-                    scorer.score(moveApplier.applyCombo(state, b), weights),
-                    scorer.score(moveApplier.applyCombo(state, a), weights)
+                    scorer.score(moveApplier.applyCombo(current, b), weights),
+                    scorer.score(moveApplier.applyCombo(current, a), weights)
                 ))
                 .limit(beamWidth)
                 .collect(Collectors.toList());
@@ -93,7 +97,7 @@ public class SimulationEngine {
 
         // explore each combo
         for (List<Move> combo : combinations) {
-            CoffeeShopState nextState = moveApplier.applyCombo(state, combo);
+            CoffeeShopState nextState = moveApplier.applyCombo(current, combo);
 
             // add node to current path
             Node<CoffeeShopState> node = new Node<>(combo, nextState);
