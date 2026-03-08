@@ -4,63 +4,97 @@ import com.dylanlively.Augur.model.*;
 
 public class Scorer {
 
-    public double score(GameState state, ScoringWeights weights) {
-        double score = 0;
+    public double score(CoffeeShopState state, ScoringWeights weights) {
 
-        // cash component
-        score += weights.getCashWeight() * normalizeCash(state.getCash());
+        double cashScore   = normalizeCash(state.getCash());
+        double profitScore = normalizeProfit(state.getProfit());
+        double growthScore = normalizeGrowth(state.getCustomersServed());
 
-        // profit component
-        score += weights.getProfitWeight() * normalizeProfit(state.getProfit());
+        double baseScore = weights.getCashWeight()   * cashScore
+                         + weights.getProfitWeight() * profitScore
+                         + weights.getGrowthWeight() * growthScore;
 
-        // growth component
-        score += weights.getGrowthWeight() * normalizeGrowth(state);
-
-        // risk penalty — lower runway = higher penalty
         double riskPenalty = calculateRiskPenalty(state, weights.getRiskTolerance());
-        score -= riskPenalty;
 
-        return Math.max(0, Math.min(100, score));
+        // ── State-aware adjustments ───────────────────────────────────────────
+        // These make the "best move" depend on the actual company situation.
+
+        double adjustment = 0;
+
+        double footTraffic      = state.getFootTraffic();
+        double monthlyUtility   = state.getUtilityCapacity() * 30;
+        double serviceCapacity  = state.getServiceCapacity();
+        double hardCapacity     = Math.min(serviceCapacity, monthlyUtility);
+
+        // Capacity waste: what fraction of potential customers can't be served?
+        double wastedTraffic  = Math.max(0, footTraffic - hardCapacity);
+        double wasteFraction  = footTraffic > 0 ? wastedTraffic / footTraffic : 0;
+
+        // Penalise high capacity waste — should have expanded capacity
+        if (wasteFraction > 0.6) adjustment -= 12;
+        else if (wasteFraction > 0.4) adjustment -= 6;
+        else if (wasteFraction < 0.1) adjustment += 8; // well-matched, good planning
+
+        // Penalise price raises proportional to future market destroyed.
+        // Even when currently capped, raised prices hurt you the moment you upgrade.
+        // The beam projects forward so this will propagate correctly.
+        if (state.getPriceRaiseCount() > 0) {
+            double marketRetained = Math.pow(0.82, state.getPriceRaiseCount());
+            double marketDestroyed = 1.0 - marketRetained; // fraction of foot traffic lost
+            // If we could serve that traffic (capacity-wise), it's real lost revenue
+            double lostRevenuePotential = state.getBaseFootTraffic() * 30
+                * marketDestroyed * state.getAvgOrderValue();
+            // But we gained AOV on served customers
+            double aovGain = state.getCustomersServed()
+                * state.getPriceRaiseCount() * 0.75;
+            double netCost = lostRevenuePotential - aovGain;
+            if (netCost > 0) {
+                adjustment -= Math.min(18, netCost / 400.0);
+            }
+        }
+
+        // Reward for having grown customer base substantially
+        if (state.getCustomersServed() > 3600) adjustment += 6;
+        if (state.getCustomersServed() > 5400) adjustment += 8;
+
+        // Penalise hiring/upgrading when severely underutilized — wasted investment
+        if (wasteFraction < 0.1 && footTraffic < hardCapacity * 0.5) {
+            if (state.getBaristas() > 2) adjustment -= 5;
+        }
+
+        double finalScore = baseScore + adjustment - riskPenalty;
+        return Math.max(0, Math.min(100, finalScore));
     }
 
-    // normalize cash to 0-100 range
+    // Range: $50k start. Coast (no moves): ~$31k after 6mo (losing money).
+    // Good outcome: $70-90k. Exceptional: $120k+ (upgrade + market + grow).
     private double normalizeCash(double cash) {
-        // assumes max meaningful cash is $500k
-        return Math.min(100, (cash / 500000) * 100);
+        return Math.min(100, Math.max(0, (cash / 120000.0) * 100));
     }
 
-    // normalize profit to 0-100 range
+    // Default: ~-$3,140/mo (underwater — creates real urgency).
+    // After 1 upgrade: +$4,240/mo. After 2 upgrades + marketing: ~$12,000/mo.
     private double normalizeProfit(double profit) {
-        // assumes max meaningful monthly profit is $20k
-        return Math.min(100, Math.max(0, (profit / 20000) * 100));
+        return Math.min(100, Math.max(0, ((profit + 3500) / 15500.0) * 100));
     }
 
-    // growth depends on preset
-    private double normalizeGrowth(GameState state) {
-        if (state instanceof CoffeeShopState s) {
-            // growth based on customers served
-            return Math.min(100, (s.getCustomersServed() / 300) * 100);
-        }
-        if (state instanceof RetailChainState s) {
-            // growth based on total revenue
-            return Math.min(100, (s.getTotalRevenue() / 1000000) * 100);
-        }
-        return 0;
+    // Default: 1800/mo. After 2 upgrades: 5400/mo. After 4 + marketing: ~12000/mo.
+    private double normalizeGrowth(double customersServed) {
+        return Math.min(100, Math.max(0, (customersServed / 10000.0) * 100));
     }
 
-    // risk penalty scales with how conservative the user is
-    private double calculateRiskPenalty(GameState state, double riskTolerance) {
-        // riskTolerance 0=conservative, 100=aggressive
+    private double calculateRiskPenalty(CoffeeShopState state, double riskTolerance) {
         double riskAversion = (100 - riskTolerance) / 100.0;
 
-        // penalty is higher when runway is low
-        double runwayPenalty = state.getRunway() < 2
-            ? (2 - state.getRunway()) * 20
-            : 0;
+        double runwayPenalty = 0;
+        if (state.getRunway() < 1.5) {
+            runwayPenalty = (1.5 - state.getRunway()) * 45;
+        } else if (state.getRunway() < 3.0) {
+            runwayPenalty = (3.0 - state.getRunway()) * 10;
+        }
 
-        // penalty is higher when profit is negative
         double profitPenalty = state.getProfit() < 0
-            ? Math.abs(state.getProfit() / 1000)
+            ? Math.abs(state.getProfit()) / 300.0
             : 0;
 
         return riskAversion * (runwayPenalty + profitPenalty);

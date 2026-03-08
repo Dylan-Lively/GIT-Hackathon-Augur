@@ -45,6 +45,7 @@ function AppInner() {
   })
 
   const [simulationResult, setSimulationResult] = useState(null)
+  const [isLoading, setIsLoading] = useState(false)
 
   async function handleGenerate() {
     const payload = {
@@ -60,8 +61,12 @@ function AppInner() {
         riskTolerance: scoringWeights.riskTolerance,
       },
     }
+    setIsLoading(true)
+    setSimulationResult(null)
+    navigate("/results")
     const result = await simulationService.generate(payload)
     setSimulationResult(result)
+    setIsLoading(false)
   }
 
   return (
@@ -88,7 +93,7 @@ function AppInner() {
           />
         } />
         <Route path="/results" element={
-          <Results result={simulationResult} initialState={initialState} />
+          <Results result={simulationResult} initialState={initialState} isLoading={isLoading} />
         } />
       </Routes>
     </>

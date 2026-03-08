@@ -8,7 +8,7 @@ import java.util.List;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class Node<T extends GameState> {
+public class Node {
     private List<Move> moves;
-    private T state;
+    private CoffeeShopState state;
 }

@@ -20,27 +20,18 @@ public class SimulationEngine {
 
     public SimulationResult run(SimulationRequest request) {
         pathsEvaluated = 0;
-        List<Path<CoffeeShopState>> results = new ArrayList<>();
-        List<Node<CoffeeShopState>> currentNodes = new ArrayList<>();
-        List<Move> moves = getMovesForPreset(request.getPreset());
+        List<Path> results = new ArrayList<>();
+        List<Node> currentNodes = new ArrayList<>();
+        List<Move> moves = getCoffeeShopMoves();
 
         CoffeeShopState initialState = (CoffeeShopState) request.getInitialState();
 
-        search(
-            initialState,
-            currentNodes,
-            results,
-            moves,
-            request.getHorizon(),
-            request.getMaxCombos(),
-            request.getBeamWidth(),
-            request.getScoringWeights()
-        );
+        search(initialState, currentNodes, results, moves,
+               request.getHorizon(), request.getMaxCombos(),
+               request.getBeamWidth(), request.getScoringWeights());
 
-        // sort by score descending
         results.sort((a, b) -> Double.compare(b.getScore(), a.getScore()));
 
-        // return top 3
         SimulationResult result = new SimulationResult();
         result.setPathsEvaluated(pathsEvaluated);
         result.setTopPaths(new ArrayList<>(results.subList(0, Math.min(3, results.size()))));
@@ -49,84 +40,121 @@ public class SimulationEngine {
 
     private void search(
         CoffeeShopState state,
-        List<Node<CoffeeShopState>> currentNodes,
-        List<Path<CoffeeShopState>> results,
+        List<Node> currentNodes,
+        List<Path> results,
         List<Move> availableMoves,
         double horizon,
         int maxCombos,
         int beamWidth,
         ScoringWeights weights
     ) {
-
-        // compute derived FIRST before any checks
         CoffeeShopState current = stateEngine.computeDerived(state);
 
-        // pruning 1 — bankrupt
         if (current.getRunway() <= 0) return;
 
-        // pruning 2 — hit horizon, score and save
         if (current.getMonthsElapsed() >= horizon) {
             savePath(current, currentNodes, results, weights);
             return;
         }
 
-        // get all affordable combos
+        double remaining = horizon - current.getMonthsElapsed();
+
         List<List<Move>> combinations = getCombinations(availableMoves, maxCombos)
             .stream()
             .filter(combo -> moveApplier.canAfford(current, combo))
+            .filter(combo -> getLongestDuration(combo) <= remaining)
+            .filter(combo -> respectsCaps(combo, current))
             .collect(Collectors.toList());
 
-        // pruning 3 — no valid moves, coast to horizon
         if (combinations.isEmpty()) {
-            double remaining = horizon - current.getMonthsElapsed();
             CoffeeShopState finalState = stateEngine.timeStep(current, remaining);
             savePath(finalState, currentNodes, results, weights);
             return;
         }
 
-        // pruning 4 — beam search, keep only top N combos by projected score
+        // Project each combo to end of horizon before scoring for beam pruning.
+        // This is critical — without it raise_prices always wins beam because
+        // it looks great short-term but destroys the addressable market.
         if (combinations.size() > beamWidth) {
             combinations = combinations.stream()
                 .sorted((a, b) -> Double.compare(
-                    scorer.score(moveApplier.applyCombo(current, b), weights),
-                    scorer.score(moveApplier.applyCombo(current, a), weights)
+                    projectScore(current, b, remaining, weights),
+                    projectScore(current, a, remaining, weights)
                 ))
                 .limit(beamWidth)
                 .collect(Collectors.toList());
         }
 
-        // explore each combo
         for (List<Move> combo : combinations) {
             CoffeeShopState nextState = moveApplier.applyCombo(current, combo);
-
-            // add node to current path
-            Node<CoffeeShopState> node = new Node<>(combo, nextState);
+            Node node = new Node(combo, nextState);
             currentNodes.add(node);
-
-            // recurse
-            search(nextState, currentNodes, results, availableMoves, 
+            search(nextState, currentNodes, results, availableMoves,
                    horizon, maxCombos, beamWidth, weights);
-
-            // backtrack
             currentNodes.remove(currentNodes.size() - 1);
         }
     }
 
+    private double projectScore(
+        CoffeeShopState current,
+        List<Move> combo,
+        double remaining,
+        ScoringWeights weights
+    ) {
+        CoffeeShopState afterCombo = moveApplier.applyCombo(current, combo);
+        double timeAfterCombo = remaining - getLongestDuration(combo);
+        if (timeAfterCombo > 0) {
+            afterCombo = stateEngine.timeStep(afterCombo, timeAfterCombo);
+        }
+        return scorer.score(afterCombo, weights);
+    }
+
+    private boolean respectsCaps(List<Move> combo, CoffeeShopState state) {
+        for (Move move : combo) {
+            switch (move.getId()) {
+                // Max 2 raises. With 0.82 elasticity, raise 1 loses 18%, raise 2 loses 33%.
+                // When utility-capped this doesn't hurt immediately but kills future growth.
+                case "raise_prices":
+                    if (state.getPriceRaiseCount() >= 2) return false;
+                    break;
+                case "increase_marketing":
+                    if (state.getMarketingCampaignCount() >= 4) return false;
+                    break;
+                case "hire_barista":
+                    if (state.getBaristas() >= 5) return false;
+                    break;
+                case "extend_hours":
+                    if (state.getHoursOpen() >= 12) return false;
+                    break;
+                // Max 4 upgrades: 60 + 4*60 = 300/day = 9000/mo
+                // This allows utility to scale beyond foot traffic,
+                // making marketing the binding constraint in later stages.
+                case "upgrade_utilities":
+                    if (state.getUtilityCapacity() >= 300) return false;
+                    break;
+            }
+        }
+        return true;
+    }
+
+    private double getLongestDuration(List<Move> combo) {
+        return combo.stream().mapToDouble(Move::getDuration).max().orElse(0);
+    }
+
     private void savePath(
         CoffeeShopState state,
-        List<Node<CoffeeShopState>> currentNodes,
-        List<Path<CoffeeShopState>> results,
+        List<Node> currentNodes,
+        List<Path> results,
         ScoringWeights weights
     ) {
         pathsEvaluated++;
-        Path<CoffeeShopState> path = new Path<>();
+        Path path = new Path();
         path.setId("path_" + pathsEvaluated);
         path.setNodes(new ArrayList<>(currentNodes));
         path.setScore(scorer.score(state, weights));
         results.add(path);
     }
 
-    // generate all combinations of moves up to maxCombo size
     private List<List<Move>> getCombinations(List<Move> moves, int maxSize) {
         List<List<Move>> result = new ArrayList<>();
         for (int size = 1; size <= maxSize; size++) {
@@ -150,22 +178,44 @@ public class SimulationEngine {
         }
     }
 
-    // placeholder — will move to preset system
-    private List<Move> getMovesForPreset(String preset) {
+    private List<Move> getCoffeeShopMoves() {
         List<Move> moves = new ArrayList<>();
 
-        if (preset.equals("coffee_shop")) {
-            moves.add(new Move("hire_barista", "Hire Barista", "👤", 1.0,
-                Map.of("cash", -2000.0, "baristas", 1.0)));
-            moves.add(new Move("upgrade_utilities", "Upgrade Utilities", "⚡", 1.0,
-                Map.of("cash", -5000.0, "utilityCapacity", 50.0)));
-            moves.add(new Move("increase_marketing", "Increase Marketing", "📣", 1.0,
-                Map.of("cash", -1000.0, "marketingSpend", 500.0)));
-            moves.add(new Move("raise_prices", "Raise Prices", "💲", 1.0,
-                Map.of("avgOrderValue", 1.0)));
-            moves.add(new Move("extend_hours", "Extend Hours", "🕐", 1.0,
-                Map.of("hoursOpen", 2.0)));
-        }
+        // RAISE PRICES (0.5mo, -$200)
+        // +$0.75 AOV but -18% foot traffic per raise (compounding).
+        // Good when: utility-capped and cash-starved (AOV gain, no customer loss yet)
+        // Bad when: capacity freed up — you've destroyed the market you just unlocked
+        moves.add(new Move("raise_prices", "Raise Prices", "💲", 0.5,
+            Map.of("cash", -200.0, "avgOrderValue", 0.75)));
+
+        // EXTEND HOURS (0.5mo, -$300)
+        // +1hr/day. Past 10hrs: 1.5x wages but only 0.3x capacity gain.
+        // Good when: service capacity is near foot traffic ceiling
+        // Bad when: utility is still the bottleneck (capacity irrelevant)
+        moves.add(new Move("extend_hours", "Extend Hours", "🕐", 0.5,
+            Map.of("cash", -300.0, "hoursOpen", 1.0)));
+
+        // HIRE BARISTA (1mo, -$2500)
+        // +1 barista. Raises service capacity AND permanent wages.
+        // Good when: service capacity < foot traffic AND utility is expanded
+        // Bad when: utility still bottlenecked (service capacity irrelevant)
+        moves.add(new Move("hire_barista", "Hire Barista", "👤", 1.0,
+            Map.of("cash", -2500.0, "baristas", 1.0)));
+
+        // MARKETING CAMPAIGN (1mo, -$2000)
+        // +20 base foot traffic/day. Log-scale diminishing returns.
+        // Good when: capacity exists to serve more customers
+        // Bad when: utility-capped (extra foot traffic just waits outside)
+        moves.add(new Move("increase_marketing", "Marketing Campaign", "📣", 1.0,
+            Map.of("cash", -2000.0, "baseFootTraffic", 20.0, "marketingSpend", 150.0)));
+
+        // UPGRADE UTILITIES (3mo, -$8000)
+        // +60 utility capacity/day = +1800 customers/mo capacity.
+        // Almost always the highest-ROI move when utility is bottleneck.
+        // Repeatable up to 4 times (cap: 300/day = 9000/mo).
+        // Bad when: foot traffic is already below current utility cap.
+        moves.add(new Move("upgrade_utilities", "Upgrade Utilities", "⚡", 3.0,
+            Map.of("cash", -8000.0, "utilityCapacity", 60.0)));
 
         return moves;
     }
