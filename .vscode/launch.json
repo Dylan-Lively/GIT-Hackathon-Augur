@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-AugurApplication<Augur>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.dylanlively.Augur.AugurApplication",
+            "projectName": "Augur",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}
