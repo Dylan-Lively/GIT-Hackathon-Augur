@@ -62,7 +62,6 @@ function rescorePaths(paths, goals, risk) {
 // ── Tree Build Animation ──────────────────────────────────────────────────────
 function TreeAnimation({ onComplete }) {
   const canvasRef = useRef()
-  const stateRef = useRef({ nodes: [], edges: [], paths: [], phase: "build", t: 0, done: false })
   const rafRef = useRef()
 
   useEffect(() => {
@@ -71,195 +70,283 @@ function TreeAnimation({ onComplete }) {
     const W = canvas.width, H = canvas.height
     const cx = W / 2
 
-    // Theme colours
-    const BG = "#0f172a"
-    const DIM = "#1e293b"
+    // Light theme matching results page
+    const BG         = "#ffffff"
+    const EDGE_DIM   = "#e2e8f0"
+    const NODE_DIM   = "#cbd5e1"
+    const NODE_ROOT  = "#0f172a"
+    const TEXT_DIM   = "#94a3b8"
+    const TEXT_COUNT = "#64748b"
     const PATH_COLORS = ["#16a34a", "#2563eb", "#d97706"]
-    const NODE_COLOR = "#334155"
-    const EDGE_COLOR = "#1e293b"
+    const PATH_ACCENTS = ["#dcfce7", "#dbeafe", "#fef3c7"]
 
-    // Build a fake decision tree
-    const ROOT = { x: cx, y: 60, id: 0 }
-    const L1 = [
-      { x: cx - 280, y: 160, id: 1 },
-      { x: cx - 80,  y: 160, id: 2 },
-      { x: cx + 80,  y: 160, id: 3 },
-      { x: cx + 280, y: 160, id: 4 },
-    ]
+    // ── 5-layer tree layout ──────────────────────────────────────────────
+    // L0: root
+    const L0 = [{ x: cx, y: 44, id: 0 }]
+
+    // L1: 5 children
+    const L1 = [-340, -170, 0, 170, 340].map((dx, i) => ({ x: cx + dx, y: 128, id: 1 + i }))
+
+    // L2: 10 nodes, 2 per L1 node
     const L2 = [
-      { x: cx - 320, y: 270, id: 5 },
-      { x: cx - 230, y: 270, id: 6 },
-      { x: cx - 130, y: 270, id: 7 },
-      { x: cx - 30,  y: 270, id: 8 },
-      { x: cx + 50,  y: 270, id: 9 },
-      { x: cx + 160, y: 270, id: 10 },
-      { x: cx + 260, y: 270, id: 11 },
-      { x: cx + 340, y: 270, id: 12 },
-    ]
-    const L3 = [
-      { x: cx - 340, y: 370, id: 13 },
-      { x: cx - 270, y: 370, id: 14 },
-      { x: cx - 200, y: 370, id: 15 },
-      { x: cx - 110, y: 370, id: 16 },
-      { x: cx - 30,  y: 370, id: 17 },
-      { x: cx + 60,  y: 370, id: 18 },
-      { x: cx + 150, y: 370, id: 19 },
-      { x: cx + 240, y: 370, id: 20 },
-      { x: cx + 310, y: 370, id: 21 },
-    ]
+      cx - 390, cx - 290, cx - 200, cx - 120, cx - 40,
+      cx + 40,  cx + 120, cx + 200, cx + 290, cx + 390,
+    ].map((x, i) => ({ x, y: 218, id: 6 + i }))
 
-    const allNodes = [ROOT, ...L1, ...L2, ...L3]
+    // L3: 16 nodes (some L2 get 2, some 1)
+    const L3xs = [
+      cx - 420, cx - 360, cx - 295, cx - 230,
+      cx - 165, cx - 95,  cx - 30,  cx + 30,
+      cx + 95,  cx + 165, cx + 230, cx + 295,
+      cx + 360, cx + 420, cx + 470, cx - 470,
+    ]
+    const L3 = L3xs.map((x, i) => ({ x, y: 308, id: 16 + i }))
+
+    // L4: 20 leaf nodes
+    const L4xs = [
+      cx - 450, cx - 410, cx - 365, cx - 320, cx - 275,
+      cx - 225, cx - 175, cx - 125, cx - 75,  cx - 25,
+      cx + 25,  cx + 75,  cx + 125, cx + 175, cx + 225,
+      cx + 275, cx + 325, cx + 375, cx + 415, cx + 455,
+    ]
+    const L4 = L4xs.map((x, i) => ({ x, y: 398, id: 32 + i }))
+
+    const allNodes = [...L0, ...L1, ...L2, ...L3, ...L4]
+
+    // ── Edges ────────────────────────────────────────────────────────────
     const allEdges = [
-      ...L1.map(n => ({ from: ROOT, to: n })),
+      // L0 → L1
+      ...L1.map(n => ({ from: L0[0], to: n })),
+      // L1 → L2 (each L1 gets 2 L2 children)
       { from: L1[0], to: L2[0] }, { from: L1[0], to: L2[1] },
       { from: L1[1], to: L2[2] }, { from: L1[1], to: L2[3] },
       { from: L1[2], to: L2[4] }, { from: L1[2], to: L2[5] },
       { from: L1[3], to: L2[6] }, { from: L1[3], to: L2[7] },
-      { from: L2[0], to: L3[0] }, { from: L2[1], to: L3[1] },
-      { from: L2[2], to: L3[2] }, { from: L2[3], to: L3[3] },
-      { from: L2[4], to: L3[4] }, { from: L2[5], to: L3[5] },
-      { from: L2[6], to: L3[6] }, { from: L2[7], to: L3[7] },
-      { from: L2[7], to: L3[8] },
+      { from: L1[4], to: L2[8] }, { from: L1[4], to: L2[9] },
+      // L2 → L3 (mixed 1 or 2 children)
+      { from: L2[0], to: L3[0]  }, { from: L2[0],  to: L3[15] },
+      { from: L2[1], to: L3[1]  }, { from: L2[1],  to: L3[2]  },
+      { from: L2[2], to: L3[3]  },
+      { from: L2[3], to: L3[4]  }, { from: L2[3],  to: L3[5]  },
+      { from: L2[4], to: L3[6]  },
+      { from: L2[5], to: L3[7]  }, { from: L2[5],  to: L3[8]  },
+      { from: L2[6], to: L3[9]  },
+      { from: L2[7], to: L3[10] }, { from: L2[7], to: L3[11] },
+      { from: L2[8], to: L3[12] },
+      { from: L2[9], to: L3[13] }, { from: L2[9], to: L3[14] },
+      // L3 → L4 (roughly 1-2 children each)
+      { from: L3[0],  to: L4[0]  }, { from: L3[0],  to: L4[1]  },
+      { from: L3[1],  to: L4[2]  },
+      { from: L3[2],  to: L4[3]  }, { from: L3[2],  to: L4[4]  },
+      { from: L3[3],  to: L4[5]  },
+      { from: L3[4],  to: L4[6]  }, { from: L3[4],  to: L4[7]  },
+      { from: L3[5],  to: L4[8]  },
+      { from: L3[6],  to: L4[9]  }, { from: L3[6],  to: L4[10] },
+      { from: L3[7],  to: L4[11] },
+      { from: L3[8],  to: L4[12] }, { from: L3[8],  to: L4[13] },
+      { from: L3[9],  to: L4[14] },
+      { from: L3[10], to: L4[15] }, { from: L3[10], to: L4[16] },
+      { from: L3[11], to: L4[17] },
+      { from: L3[12], to: L4[18] },
+      { from: L3[13], to: L4[19] },
+      { from: L3[14], to: L4[18] },
+      { from: L3[15], to: L4[0]  },
     ]
 
-    // Three highlight paths
+    // ── 3 highlighted paths (one per strategy color) ──────────────────
     const highlightPaths = [
-      [ROOT, L1[0], L2[0], L3[0]],
-      [ROOT, L1[2], L2[4], L3[4]],
-      [ROOT, L1[3], L2[7], L3[8]],
+      [L0[0], L1[0], L2[1], L3[2],  L4[4]  ], // green  – Strategy A
+      [L0[0], L1[2], L2[4], L3[6],  L4[9]  ], // blue   – Strategy B
+      [L0[0], L1[4], L2[9], L3[13], L4[19] ], // amber  – Strategy C
     ]
 
     let startTime = null
-    const TOTAL = 3200 // ms total animation
+    const TOTAL = 3600
 
-    function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t }
+    function easeOut(t) { return 1 - Math.pow(1 - t, 3) }
+    function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t }
+
+    function nodeRadius(n) {
+      if (n.id === 0) return 9
+      if (n.id <= 5)  return 6
+      return 4.5
+    }
 
     function draw(ts) {
       if (!startTime) startTime = ts
-      const elapsed = ts - startTime
-      const raw = Math.min(elapsed / TOTAL, 1)
-      const t = ease(raw)
+      const raw = Math.min((ts - startTime) / TOTAL, 1)
 
+      // White card background
       ctx.fillStyle = BG
       ctx.fillRect(0, 0, W, H)
 
-      const buildEnd = 0.55
-      const selectStart = 0.60
-      const fadeEnd = 1.0
+      // Subtle grid dots for texture (matches results page card feel)
+      ctx.fillStyle = "#f1f5f9"
+      for (let gx = 20; gx < W; gx += 28) {
+        for (let gy = 20; gy < H; gy += 28) {
+          ctx.beginPath()
+          ctx.arc(gx, gy, 1, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+
+      const buildEnd   = 0.52
+      const selectStart = 0.58
 
       if (raw < buildEnd) {
-        // Phase 1: rapidly build the tree
-        const progress = raw / buildEnd
-        const totalItems = allEdges.length + allNodes.length
+        // ── Phase 1: build tree left-to-right, layer by layer ──────────
+        const progress = easeOut(raw / buildEnd)
+        const layers = [L0, L1, L2, L3, L4]
+        const totalEdges = allEdges.length
+        const totalNodes = allNodes.length
+        const totalItems = totalEdges + totalNodes
         const revealed = Math.floor(progress * totalItems)
 
-        // Draw revealed edges
-        allEdges.slice(0, Math.max(0, revealed - allNodes.length)).forEach(e => {
+        // Edges first (drawn behind nodes)
+        allEdges.slice(0, Math.max(0, revealed)).forEach(e => {
           ctx.beginPath()
           ctx.moveTo(e.from.x, e.from.y)
           ctx.lineTo(e.to.x, e.to.y)
-          ctx.strokeStyle = EDGE_COLOR
-          ctx.lineWidth = 1.5
+          ctx.strokeStyle = EDGE_DIM
+          ctx.lineWidth = 1
           ctx.stroke()
         })
 
-        // Draw revealed nodes
-        allNodes.slice(0, Math.min(revealed, allNodes.length)).forEach(n => {
+        // Nodes
+        allNodes.slice(0, Math.min(revealed, totalNodes)).forEach(n => {
+          const r = nodeRadius(n)
+          // White fill with border (matches card style)
           ctx.beginPath()
-          ctx.arc(n.x, n.y, n.id === 0 ? 8 : 5, 0, Math.PI * 2)
-          ctx.fillStyle = n.id === 0 ? "#94a3b8" : NODE_COLOR
+          ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+          ctx.fillStyle = n.id === 0 ? NODE_ROOT : "white"
           ctx.fill()
+          ctx.strokeStyle = n.id === 0 ? NODE_ROOT : NODE_DIM
+          ctx.lineWidth = n.id === 0 ? 0 : 1.5
+          ctx.stroke()
         })
 
-        // Counter text
+        // Animated counter
         const pathCount = Math.floor(progress * 7654)
-        ctx.fillStyle = "#334155"
-        ctx.font = "600 13px monospace"
+        ctx.fillStyle = TEXT_COUNT
+        ctx.font = "600 12px monospace"
         ctx.textAlign = "center"
-        ctx.fillText(`${pathCount.toLocaleString()} paths evaluated...`, cx, H - 36)
+        ctx.fillText(`evaluating ${pathCount.toLocaleString()} paths...`, cx, H - 20)
 
       } else {
-        // Phase 2: all nodes visible, highlight the 3 paths
-        const selectProgress = Math.min((raw - selectStart) / (fadeEnd - selectStart), 1)
+        // ── Phase 2: dim everything, then illuminate 3 paths ───────────
+        const selectProgress = Math.min((raw - selectStart) / (1 - selectStart), 1)
+        const sp = easeInOut(selectProgress)
 
         // Draw all dim edges
         allEdges.forEach(e => {
           ctx.beginPath()
           ctx.moveTo(e.from.x, e.from.y)
           ctx.lineTo(e.to.x, e.to.y)
-          ctx.strokeStyle = EDGE_COLOR
+          ctx.strokeStyle = EDGE_DIM
           ctx.lineWidth = 1
           ctx.stroke()
         })
 
         // Draw all dim nodes
         allNodes.forEach(n => {
+          const r = nodeRadius(n)
           ctx.beginPath()
-          ctx.arc(n.x, n.y, n.id === 0 ? 8 : 5, 0, Math.PI * 2)
-          ctx.fillStyle = DIM
+          ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+          ctx.fillStyle = "#f8fafc"
           ctx.fill()
+          ctx.strokeStyle = "#e2e8f0"
+          ctx.lineWidth = 1.5
+          ctx.stroke()
         })
 
         // Highlight each path with staggered timing
         highlightPaths.forEach((path, pi) => {
-          const delay = pi * 0.18
-          const pathProgress = Math.max(0, Math.min((selectProgress - delay) / 0.45, 1))
-          if (pathProgress <= 0) return
+          const delay  = pi * 0.22
+          const pp     = Math.max(0, Math.min((sp - delay) / 0.5, 1))
+          if (pp <= 0) return
 
-          const color = PATH_COLORS[pi]
+          const color  = PATH_COLORS[pi]
+          const accent = PATH_ACCENTS[pi]
 
-          // Glow edges
+          // Glowing edges along path
           for (let i = 0; i < path.length - 1; i++) {
-            const segProgress = Math.min(Math.max((pathProgress - i * 0.25) / 0.35, 0), 1)
-            if (segProgress <= 0) continue
+            const segP = Math.min(Math.max((pp - i * 0.2) / 0.3, 0), 1)
+            if (segP <= 0) continue
             const from = path[i], to = path[i + 1]
-            const ex = from.x + (to.x - from.x) * segProgress
-            const ey = from.y + (to.y - from.y) * segProgress
+            const ex = from.x + (to.x - from.x) * segP
+            const ey = from.y + (to.y - from.y) * segP
 
+            // Soft glow underneath
+            ctx.beginPath()
+            ctx.moveTo(from.x, from.y)
+            ctx.lineTo(ex, ey)
+            ctx.strokeStyle = color + "33"
+            ctx.lineWidth = 7
+            ctx.stroke()
+
+            // Crisp colored edge on top
             ctx.beginPath()
             ctx.moveTo(from.x, from.y)
             ctx.lineTo(ex, ey)
             ctx.strokeStyle = color
-            ctx.lineWidth = 2.5
-            ctx.shadowColor = color
-            ctx.shadowBlur = 8
+            ctx.lineWidth = 2
             ctx.stroke()
-            ctx.shadowBlur = 0
           }
 
-          // Highlight nodes along path
+          // Highlighted nodes along path
           path.forEach((n, ni) => {
-            const nodeProgress = Math.min(Math.max((pathProgress - ni * 0.22) / 0.3, 0), 1)
-            if (nodeProgress <= 0) return
+            const np = Math.min(Math.max((pp - ni * 0.18) / 0.25, 0), 1)
+            if (np <= 0) return
+            const r = (nodeRadius(n) + 2) * np
+            // Accent fill (matches card accent colors)
             ctx.beginPath()
-            ctx.arc(n.x, n.y, (n.id === 0 ? 10 : 7) * nodeProgress, 0, Math.PI * 2)
-            ctx.fillStyle = color
-            ctx.shadowColor = color
-            ctx.shadowBlur = 12 * nodeProgress
+            ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2)
+            ctx.fillStyle = accent
             ctx.fill()
-            ctx.shadowBlur = 0
+            ctx.beginPath()
+            ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+            ctx.fillStyle = color
+            ctx.fill()
           })
         })
 
-        // Label the 3 terminal nodes
-        if (selectProgress > 0.85) {
-          const alpha = (selectProgress - 0.85) / 0.15
+        // Strategy labels on terminal nodes
+        if (sp > 0.80) {
+          const alpha = Math.min((sp - 0.80) / 0.20, 1)
           highlightPaths.forEach((path, pi) => {
-            const end = path[path.length - 1]
+            const end   = path[path.length - 1]
             const color = PATH_COLORS[pi]
+            const accent = PATH_ACCENTS[pi]
+
             ctx.globalAlpha = alpha
+
+            // Pill badge (matches ranked badge style)
+            const label = `Strategy ${String.fromCharCode(65 + pi)}`
+            ctx.font = "700 10px monospace"
+            const tw = ctx.measureText(label).width
+            const bw = tw + 16, bh = 18, bx = end.x - bw / 2, by = end.y + 13
+
+            ctx.fillStyle = accent
+            ctx.beginPath()
+            ctx.roundRect(bx, by, bw, bh, 9)
+            ctx.fill()
+
             ctx.fillStyle = color
-            ctx.font = "700 11px monospace"
             ctx.textAlign = "center"
-            ctx.fillText(`Strategy ${String.fromCharCode(65 + pi)}`, end.x, end.y + 22)
+            ctx.fillText(label, end.x, by + 13)
+
             ctx.globalAlpha = 1
           })
         }
 
-        ctx.fillStyle = "#475569"
-        ctx.font = "600 13px monospace"
+        // Bottom status line
+        const statusAlpha = Math.min(sp * 3, 1)
+        ctx.globalAlpha = statusAlpha
+        ctx.fillStyle = TEXT_COUNT
+        ctx.font = "600 12px monospace"
         ctx.textAlign = "center"
-        ctx.fillText("7,654 paths evaluated · top 3 selected", cx, H - 36)
+        ctx.fillText("7,654 paths evaluated · top 3 strategies selected", cx, H - 20)
+        ctx.globalAlpha = 1
       }
 
       if (raw < 1) {
@@ -276,9 +363,9 @@ function TreeAnimation({ onComplete }) {
   return (
     <canvas
       ref={canvasRef}
-      width={800}
-      height={480}
-      style={{ width: "100%", maxWidth: 800, borderRadius: 16, display: "block" }}
+      width={980}
+      height={460}
+      style={{ width: "100%", maxWidth: 980, borderRadius: 12, display: "block" }}
     />
   )
 }
@@ -722,24 +809,29 @@ export default function Results({ result, initialState, isLoading }) {
   if (showAnimation && !readyToShow) {
     return (
       <div style={{
-        minHeight: "calc(100vh - 56px)", background: "#0f172a",
+        minHeight: "calc(100vh - 56px)", background: "#fafafa",
         display: "flex", flexDirection: "column", alignItems: "center",
-        justifyContent: "center", gap: "24px", padding: "40px 24px",
+        justifyContent: "center", gap: "20px", padding: "40px 24px",
       }}>
-        <div style={{ textAlign: "center", marginBottom: "8px" }}>
-          <div style={{ fontSize: "10px", color: "#475569", letterSpacing: "3px", fontFamily: "monospace", marginBottom: "10px" }}>
+        <div style={{ textAlign: "center", marginBottom: "4px" }}>
+          <div style={{ fontSize: "10px", color: "#94a3b8", letterSpacing: "3px", fontFamily: "monospace", marginBottom: "10px" }}>
             AUGUR ENGINE RUNNING
           </div>
-          <div style={{ fontSize: "22px", fontWeight: "800", color: "white", letterSpacing: "-0.5px" }}>
+          <div style={{ fontSize: "22px", fontWeight: "800", color: "#0f172a", letterSpacing: "-0.5px" }}>
             Searching decision tree...
           </div>
         </div>
-        <TreeAnimation onComplete={() => setAnimDone(true)} />
+        <div style={{
+          background: "white", borderRadius: "16px", border: "1px solid #e2e8f0",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.06)", padding: "24px", width: "100%", maxWidth: 1000,
+        }}>
+          <TreeAnimation onComplete={() => setAnimDone(true)} />
+        </div>
         {isLoading && (
           <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
             {[0, 1, 2].map(i => (
               <div key={i} style={{
-                width: 6, height: 6, borderRadius: "50%", background: "#334155",
+                width: 6, height: 6, borderRadius: "50%", background: "#cbd5e1",
                 animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
               }} />
             ))}
