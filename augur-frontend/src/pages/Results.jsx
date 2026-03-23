@@ -26,29 +26,44 @@ function transformPath(path, index, initialCash) {
   }
 }
 
-function rescorePaths(paths, goals, risk) {
-  const normalize = (arr) => {
-    const min = Math.min(...arr), max = Math.max(...arr)
-    return arr.map(v => max === min ? 50 : ((v - min) / (max - min)) * 100)
+function rerank(paths, goals, risk, initialState) {
+  const riskAversion    = (100 - risk) / 100
+  const initialCash      = initialState.cash
+  const initialCustomers = initialState.baseFootTraffic * 30
+
+  const computeScore = p => {
+    // 50 = broke even, 100 = doubled cash, 0 = lost everything
+    const cashScore = Math.min(100, Math.max(0, (p.final.cash / initialCash) * 50))
+
+    // 50 = breaking even (profit=0), 100 = profit reached half of initialRevenue
+    const initialRevenue = initialState.baseFootTraffic * 30 * initialState.avgOrderValue
+    const profitScore = Math.min(100, Math.max(0,
+      ((p.final.profit + initialRevenue) / (initialRevenue * 1.8)) * 100
+    ))
+
+    // 50 = same customers as start, 100 = 50% more customers
+    const growthScore = Math.min(100, Math.max(0,
+      (p.final.customersServed / initialCustomers) * 66.6
+    ))
+
+    const weighted = (goals.cash   / 100) * cashScore
+                   + (goals.profit / 100) * profitScore
+                   + (goals.growth / 100) * growthScore
+
+    return Math.max(0, Math.min(100, Math.round(
+      weighted - riskAversion * (100 - p.riskScore) * 0.15
+    )))
   }
-  const cashN   = normalize(paths.map(p => p.final.cash))
-  const profitN = normalize(paths.map(p => p.final.profit))
-  const growthN = normalize(paths.map(p => p.cashGrowth))
-  const riskN   = normalize(paths.map(p => p.minRunway))
-  const riskAversion = (100 - risk) / 100
-  return paths.map((p, i) => {
-    const goalScore = (goals.cash / 100) * cashN[i] + (goals.profit / 100) * profitN[i] + (goals.growth / 100) * growthN[i]
-    const riskPenalty = riskAversion * (100 - riskN[i]) * 0.4
-    const score = Math.round(Math.max(0, Math.min(100, goalScore - riskPenalty + 10)))
-    return { ...p, score }
-  }).sort((a, b) => b.score - a.score)
+
+  return [...paths]
+    .map(p => ({ ...p, score: computeScore(p) }))
+    .sort((a, b) => b.score - a.score)
 }
 
 // ── Tree Animation ─────────────────────────────────────────────────────────────
 function TreeAnimation({ onComplete, dataReady }) {
   const canvasRef = useRef()
   const rafRef    = useRef()
-  // Keep dataReady readable inside the rAF loop without re-running the effect
   const dataReadyRef = useRef(dataReady)
   useEffect(() => { dataReadyRef.current = dataReady }, [dataReady])
 
@@ -63,7 +78,6 @@ function TreeAnimation({ onComplete, dataReady }) {
     const PATH_COLORS  = ["#16a34a", "#2563eb", "#d97706"]
     const PATH_ACCENTS = ["#dcfce7", "#dbeafe", "#fef3c7"]
 
-    // Hand-tuned 5-layer tree
     const L0 = [{ x: cx, y: 44, id: 0 }]
     const L1 = [-340,-170,0,170,340].map((dx,i) => ({ x: cx+dx, y: 128, id: 1+i }))
     const L2 = [cx-390,cx-290,cx-200,cx-120,cx-40,cx+40,cx+120,cx+200,cx+290,cx+390].map((x,i) => ({ x, y: 218, id: 6+i }))
@@ -98,46 +112,34 @@ function TreeAnimation({ onComplete, dataReady }) {
     const easeOut    = t => 1 - Math.pow(1-t, 3)
     const easeInOut  = t => t < 0.5 ? 2*t*t : -1+(4-2*t)*t
 
-    const BUILD_DURATION     = 2200
-    const HIGHLIGHT_DURATION = 1800
-    let startTime      = null
-    let highlightStart = null  // latched the frame data arrives + build done
-    let frozenCount    = null  // counter value at that latch moment
-    let done           = false
+    const BUILD_DURATION = 2200, HIGHLIGHT_DURATION = 1800
+    let startTime = null, highlightStart = null, frozenCount = null, done = false
 
     function draw(ts) {
       if (done) return
       if (!startTime) startTime = ts
-
-      const elapsed  = ts - startTime
+      const elapsed = ts - startTime
       const buildRaw = Math.min(elapsed / BUILD_DURATION, 1)
       const buildDone = buildRaw >= 1
-
-      // Counter climbs the entire time at ~120 paths/sec
       const liveCount = Math.floor(elapsed * 180)
 
-      // Latch highlight phase the first frame tree is done AND data is ready
       if (buildDone && dataReadyRef.current && highlightStart === null) {
-        frozenCount    = liveCount
-        highlightStart = ts
+        frozenCount = liveCount; highlightStart = ts
       }
 
       const highlightRaw = highlightStart !== null ? Math.min((ts - highlightStart) / HIGHLIGHT_DURATION, 1) : 0
-      const finished     = highlightStart !== null && highlightRaw >= 1
+      const finished = highlightStart !== null && highlightRaw >= 1
 
-      // ── Background ───────────────────────────────────────────────────────
-      ctx.fillStyle = BG
-      ctx.fillRect(0, 0, W, H)
+      ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H)
       ctx.fillStyle = "#f1f5f9"
       for (let gx = 20; gx < W; gx += 28)
         for (let gy = 20; gy < H; gy += 28) {
           ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI*2); ctx.fill()
         }
 
-      // ── Tree ─────────────────────────────────────────────────────────────
       const totalItems = allEdges.length + allNodes.length
-      const revealed   = buildDone ? totalItems : Math.floor(easeOut(buildRaw) * totalItems)
-      const dimming    = highlightStart !== null
+      const revealed = buildDone ? totalItems : Math.floor(easeOut(buildRaw) * totalItems)
+      const dimming = highlightStart !== null
 
       allEdges.slice(0, Math.max(0, revealed - allNodes.length)).forEach(e => {
         ctx.beginPath(); ctx.moveTo(e.from.x, e.from.y); ctx.lineTo(e.to.x, e.to.y)
@@ -147,31 +149,26 @@ function TreeAnimation({ onComplete, dataReady }) {
         const r = nodeRadius(n)
         ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI*2)
         if (dimming) {
-          ctx.fillStyle = "#f8fafc"; ctx.fill()
-          ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 1.5; ctx.stroke()
+          ctx.fillStyle = "#f8fafc"; ctx.fill(); ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 1.5; ctx.stroke()
         } else if (n.id === 0) {
           ctx.fillStyle = "#0f172a"; ctx.fill()
         } else {
-          ctx.fillStyle = "white"; ctx.fill()
-          ctx.strokeStyle = NODE_DIM; ctx.lineWidth = 1.5; ctx.stroke()
+          ctx.fillStyle = "white"; ctx.fill(); ctx.strokeStyle = NODE_DIM; ctx.lineWidth = 1.5; ctx.stroke()
         }
       })
 
-      // ── Highlight paths ───────────────────────────────────────────────────
       if (highlightStart !== null) {
         const sp = easeInOut(highlightRaw)
         highlightPaths.forEach((path, pi) => {
           const delay = pi * 0.22
-          const pp    = Math.max(0, Math.min((sp - delay) / 0.5, 1))
+          const pp = Math.max(0, Math.min((sp - delay) / 0.5, 1))
           if (pp <= 0) return
           const color = PATH_COLORS[pi], accent = PATH_ACCENTS[pi]
-
           for (let i = 0; i < path.length - 1; i++) {
             const segP = Math.min(Math.max((pp - i*0.2) / 0.3, 0), 1)
             if (segP <= 0) continue
             const from = path[i], to = path[i+1]
-            const ex = from.x + (to.x - from.x) * segP
-            const ey = from.y + (to.y - from.y) * segP
+            const ex = from.x + (to.x - from.x) * segP, ey = from.y + (to.y - from.y) * segP
             ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(ex, ey)
             ctx.strokeStyle = color+"33"; ctx.lineWidth = 7; ctx.stroke()
             ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(ex, ey)
@@ -182,17 +179,15 @@ function TreeAnimation({ onComplete, dataReady }) {
             if (np <= 0) return
             const r = (nodeRadius(n) + 2) * np
             ctx.beginPath(); ctx.arc(n.x, n.y, r+3, 0, Math.PI*2); ctx.fillStyle = accent; ctx.fill()
-            ctx.beginPath(); ctx.arc(n.x, n.y, r,   0, Math.PI*2); ctx.fillStyle = color;  ctx.fill()
+            ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI*2); ctx.fillStyle = color; ctx.fill()
           })
         })
-
         if (highlightRaw > 0.80) {
           const alpha = Math.min((highlightRaw - 0.80) / 0.20, 1)
           highlightPaths.forEach((path, pi) => {
             const end = path[path.length-1]
             const color = PATH_COLORS[pi], accent = PATH_ACCENTS[pi]
-            ctx.globalAlpha = alpha
-            ctx.font = "700 10px monospace"
+            ctx.globalAlpha = alpha; ctx.font = "700 10px monospace"
             const label = `Strategy ${String.fromCharCode(65+pi)}`
             const tw = ctx.measureText(label).width
             const bw = tw+16, bh = 18, bx = end.x - bw/2, by = end.y + 13
@@ -203,13 +198,11 @@ function TreeAnimation({ onComplete, dataReady }) {
         }
       }
 
-      // ── Counter text ──────────────────────────────────────────────────────
       ctx.font = "600 12px monospace"; ctx.textAlign = "center"
       if (highlightStart === null) {
         ctx.fillStyle = "#64748b"
         ctx.fillText(`${liveCount.toLocaleString()} paths evaluated...`, cx, H - 20)
       } else {
-        // Cross-fade from "evaluated..." to "· top 3 selected"
         const fadeIn = Math.min(highlightRaw * 3, 1)
         ctx.globalAlpha = 1 - fadeIn; ctx.fillStyle = "#64748b"
         ctx.fillText(`${frozenCount.toLocaleString()} paths evaluated...`, cx, H - 20)
@@ -218,12 +211,8 @@ function TreeAnimation({ onComplete, dataReady }) {
         ctx.globalAlpha = 1
       }
 
-      if (finished) {
-        done = true
-        setTimeout(onComplete, 200)
-      } else {
-        rafRef.current = requestAnimationFrame(draw)
-      }
+      if (finished) { done = true; setTimeout(onComplete, 200) }
+      else rafRef.current = requestAnimationFrame(draw)
     }
 
     rafRef.current = requestAnimationFrame(draw)
@@ -291,7 +280,7 @@ function DivergenceChart({ paths, activeIndex }) {
         const pts = animPts(progress, path), isActive = si === activeIndex, color = CARD_COLORS[si]
         const pathD = pts.map((p,i) => `${i===0?"M":"L"}${p[0]},${p[1]}`).join(" ")
         return (
-          <g key={path.id}>
+          <g key={path.pathId}>
             {isActive && pts.length > 1 && (
               <path d={`${pathD} L${pts[pts.length-1][0]},${PAD.top+innerH} L${PAD.left},${PAD.top+innerH} Z`} fill={color} opacity="0.07" />
             )}
@@ -338,9 +327,9 @@ function RiskBadge({ score }) {
 function StrategyCard({ path, rank, isFront, offset, onClick, onDetail }) {
   const color = CARD_COLORS[rank], accent = CARD_ACCENTS[rank], scale = isFront ? 1 : 0.88
   const metrics = [
-    { label:"FINAL CASH",     value:fmtFull(path.final.cash),           hi:true  },
-    { label:"MONTHLY PROFIT", value:fmtProfit(path.final.profit),        hi:false },
-    { label:"CASH GROWTH",    value:fmtPct(path.cashGrowth),             hi:false },
+    { label:"FINAL CASH",     value:fmtFull(path.final.cash),            hi:true  },
+    { label:"MONTHLY PROFIT", value:fmtProfit(path.final.profit),         hi:false },
+    { label:"CASH GROWTH",    value:fmtPct(path.cashGrowth),              hi:false },
     { label:"RISK",           value:<RiskBadge score={path.riskScore} />, hi:false },
   ]
   return (
@@ -475,7 +464,22 @@ function DetailModal({ path, rank, onClose }) {
 }
 
 function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
-  const total = goals.cash + goals.profit + goals.growth
+  const lastTouched = useRef(null)
+
+  const setGoal = (key, val) => {
+    const others = Object.keys(goals).filter(k => k !== key)
+    const absorb = others.find(k => k !== lastTouched.current) ?? others[1]
+    const fixed  = others.find(k => k !== absorb)
+
+    const clamped   = Math.max(0, Math.min(100, val))
+    const remaining = 100 - clamped
+    const fixedVal  = Math.min(goals[fixed], remaining)
+    const absorbVal = Math.max(0, remaining - fixedVal)
+
+    lastTouched.current = key
+    setGoals(g => ({ ...g, [key]: clamped, [fixed]: fixedVal, [absorb]: absorbVal }))
+  }
+
   const Slider = ({ label, value, onChange, color }) => (
     <div style={{ marginBottom:"14px" }}>
       <div style={{ display:"flex", justifyContent:"space-between", marginBottom:"6px" }}>
@@ -489,6 +493,7 @@ function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
       </div>
     </div>
   )
+
   return (
     <div style={{ position:"fixed", inset:0, zIndex:100, display:"flex", alignItems:"flex-start", justifyContent:"flex-end" }}>
       <div onClick={onClose} style={{ position:"absolute", inset:0, background:"rgba(15,23,42,0.15)" }} />
@@ -502,12 +507,12 @@ function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
         </div>
         <div style={{ marginBottom:"28px" }}>
           <div style={{ fontSize:"11px", color:"#0f172a", fontWeight:"700", letterSpacing:"1px", fontFamily:"monospace", marginBottom:"16px" }}>GOAL WEIGHTS</div>
-          <div style={{ padding:"10px 14px", background:total>100?"#fef2f2":"#f0fdf4", borderRadius:"8px", marginBottom:"16px", border:`1px solid ${total>100?"#fecaca":"#bbf7d0"}`, fontSize:"11px", color:total>100?"#ef4444":"#16a34a", fontFamily:"monospace", fontWeight:"600" }}>
-            {total > 100 ? `⚠ Total ${total} — reduce weights` : `✓ Total weight: ${total}`}
+          <div style={{ padding:"10px 14px", background:"#f0fdf4", borderRadius:"8px", marginBottom:"16px", border:"1px solid #bbf7d0", fontSize:"11px", color:"#16a34a", fontFamily:"monospace", fontWeight:"600" }}>
+            ✓ Always sums to 100 — only one other slider adjusts
           </div>
-          <Slider label="FINAL CASH"     value={goals.cash}   color="#16a34a" onChange={v => setGoals(g => ({ ...g, cash:v }))} />
-          <Slider label="MONTHLY PROFIT" value={goals.profit} color="#2563eb" onChange={v => setGoals(g => ({ ...g, profit:v }))} />
-          <Slider label="CASH GROWTH"    value={goals.growth} color="#d97706" onChange={v => setGoals(g => ({ ...g, growth:v }))} />
+          <Slider label="FINAL CASH"      value={goals.cash}   color="#16a34a" onChange={v => setGoal("cash",   v)} />
+          <Slider label="MONTHLY PROFIT"  value={goals.profit} color="#2563eb" onChange={v => setGoal("profit", v)} />
+          <Slider label="CUSTOMER GROWTH" value={goals.growth} color="#d97706" onChange={v => setGoal("growth", v)} />
         </div>
         <div style={{ height:"1px", background:"#f1f5f9", marginBottom:"24px" }} />
         <div style={{ marginBottom:"28px" }}>
@@ -522,9 +527,9 @@ function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
         </div>
         <div style={{ height:"1px", background:"#f1f5f9", marginBottom:"24px" }} />
         <div>
-          <div style={{ fontSize:"11px", color:"#94a3b8", letterSpacing:"1px", fontFamily:"monospace", marginBottom:"12px" }}>HOW SCORING WORKS</div>
+          <div style={{ fontSize:"11px", color:"#94a3b8", letterSpacing:"1px", fontFamily:"monospace", marginBottom:"12px" }}>HOW RE-RANKING WORKS</div>
           <div style={{ fontSize:"12px", color:"#64748b", lineHeight:"1.8" }}>
-            Each path is scored by normalizing its metrics across all {pathCount.toLocaleString()} discovered paths, then weighted by your goals. Risk tolerance penalizes low-runway strategies.
+            Scores use fixed scales relative to your starting state. Moving a slider shifts only the least recently adjusted other slider — the one you set before stays put.
           </div>
         </div>
       </div>
@@ -534,39 +539,31 @@ function GoalsPanel({ goals, setGoals, risk, setRisk, onClose, pathCount }) {
 }
 
 export default function Results({ result, initialState, isLoading }) {
-  const [active, setActive]       = useState(0)
-  const [showGoals, setShowGoals] = useState(false)
+  const [active, setActive]           = useState(0)
+  const [showGoals, setShowGoals]     = useState(false)
   const [detailIndex, setDetailIndex] = useState(null)
-  const [goals, setGoals] = useState({ cash: 60, profit: 50, growth: 40 })
-  const [risk, setRisk]   = useState(40)
-  const [ranked, setRanked] = useState([])
+  const [goals, setGoals]             = useState({ cash: 34, profit: 33, growth: 33 })
+  const [risk, setRisk]               = useState(40)
+  const [ranked, setRanked]           = useState([])
   const [showAnimation, setShowAnimation] = useState(false)
-  const [animDone, setAnimDone]   = useState(false)
+  const [animDone, setAnimDone]       = useState(false)
   const navigate = useNavigate()
 
   const initialCash = initialState?.cash ?? 50000
 
-  // Fire animation exactly once when a new load begins
   useEffect(() => {
-    if (isLoading) {
-      setShowAnimation(true)
-      setAnimDone(false)
-    }
+    if (isLoading) { setShowAnimation(true); setAnimDone(false) }
   }, [isLoading])
 
-  // dataReady: backend has responded — drives the highlight phase inside the animation
-  const dataReady = !!result && !isLoading
-
-  // Show results as soon as animation finishes AND result exists.
-  // Crucially: no `isLoading` check here — if data came back while animating we
-  // don't rerun the tree, we just proceed straight to results once animDone flips.
+  const dataReady   = !!result && !isLoading
   const readyToShow = animDone && !!result
 
   useEffect(() => {
     if (!result?.topPaths) return
     const transformed = result.topPaths.map((p, i) => transformPath(p, i, initialCash))
-    const rescored    = rescorePaths(transformed, goals, risk)
-    setRanked(rescored.map((p, i) => ({ ...p, id: LABELS[i] })))
+    const reranked = rerank(transformed, goals, risk, initialState ?? { cash: 50000, baseFootTraffic: 100 })
+      .map((p, i) => ({ ...p, id: LABELS[i] }))
+    setRanked(reranked)
     setActive(0)
   }, [result, goals, risk])
 
@@ -587,7 +584,6 @@ export default function Results({ result, initialState, isLoading }) {
           <div style={{ fontSize:"22px", fontWeight:"800", color:"#0f172a", letterSpacing:"-0.5px" }}>Searching decision tree...</div>
         </div>
         <div style={{ background:"white", borderRadius:"16px", border:"1px solid #e2e8f0", boxShadow:"0 4px 24px rgba(0,0,0,0.06)", padding:"24px", width:"100%", maxWidth:1000 }}>
-          {/* key="tree" pins this to one instance — never remounts mid-animation */}
           <TreeAnimation key="tree" dataReady={dataReady} onComplete={() => setAnimDone(true)} />
         </div>
         <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
@@ -609,7 +605,12 @@ export default function Results({ result, initialState, isLoading }) {
   return (
     <div style={{ minHeight:"calc(100vh - 56px)", background:"#fafafa", fontFamily:"Georgia, serif" }}>
       {showGoals && result && (
-        <GoalsPanel goals={goals} setGoals={setGoals} risk={risk} setRisk={setRisk} onClose={() => setShowGoals(false)} pathCount={result.pathsEvaluated ?? 0} />
+        <GoalsPanel
+          goals={goals} setGoals={setGoals}
+          risk={risk} setRisk={setRisk}
+          onClose={() => setShowGoals(false)}
+          pathCount={result.pathsEvaluated ?? 0}
+        />
       )}
       {detailIndex !== null && ranked[detailIndex] && (
         <DetailModal path={ranked[detailIndex]} rank={detailIndex} onClose={() => setDetailIndex(null)} />
@@ -649,7 +650,7 @@ export default function Results({ result, initialState, isLoading }) {
               <span style={{ fontSize:"10px", color:"#94a3b8", letterSpacing:"2px", fontFamily:"monospace" }}>CASH OVER TIME</span>
               <div style={{ display:"flex", gap:"16px" }}>
                 {ranked.map((p, i) => (
-                  <div key={p.id} style={{ display:"flex", alignItems:"center", gap:"6px", cursor:"pointer" }} onClick={() => setActive(i)}>
+                  <div key={p.pathId} style={{ display:"flex", alignItems:"center", gap:"6px", cursor:"pointer" }} onClick={() => setActive(i)}>
                     <div style={{ width:"20px", height:"3px", borderRadius:"2px", background:CARD_COLORS[i], opacity:i===active?1:0.3 }} />
                     <span style={{ fontSize:"10px", color:i===active?CARD_COLORS[i]:"#94a3b8", fontFamily:"monospace", fontWeight:i===active?"700":"400" }}>{p.id} (#{i+1})</span>
                   </div>
@@ -666,7 +667,7 @@ export default function Results({ result, initialState, isLoading }) {
             <div style={{ display:"grid", gridTemplateColumns:"120px 1fr 1fr 1fr" }}>
               <div />
               {ranked.map((p, i) => (
-                <div key={p.id} style={{ textAlign:"center", paddingBottom:"10px", borderBottom:`2px solid ${CARD_COLORS[i]}` }}>
+                <div key={p.pathId} style={{ textAlign:"center", paddingBottom:"10px", borderBottom:`2px solid ${CARD_COLORS[i]}` }}>
                   <span style={{ fontSize:"11px", fontWeight:"700", color:CARD_COLORS[i], fontFamily:"monospace" }}>{p.id}</span>
                 </div>
               ))}
@@ -680,7 +681,7 @@ export default function Results({ result, initialState, isLoading }) {
                 <>
                   <div key={label} style={{ fontSize:"11px", color:"#64748b", padding:"10px 0", borderBottom:"1px solid #f8fafc", fontFamily:"monospace" }}>{label}</div>
                   {ranked.map((p, i) => (
-                    <div key={p.id+label} style={{ textAlign:"center", padding:"10px 0", borderBottom:"1px solid #f8fafc", fontSize:"13px", fontWeight:"700", color:"#0f172a", display:"flex", alignItems:"center", justifyContent:"center" }}>{get(p)}</div>
+                    <div key={p.pathId+label} style={{ textAlign:"center", padding:"10px 0", borderBottom:"1px solid #f8fafc", fontSize:"13px", fontWeight:"700", color:"#0f172a", display:"flex", alignItems:"center", justifyContent:"center" }}>{get(p)}</div>
                   ))}
                 </>
               ))}
@@ -689,11 +690,11 @@ export default function Results({ result, initialState, isLoading }) {
         )}
 
         <div style={{ fontSize:"10px", color:"#94a3b8", letterSpacing:"3px", fontFamily:"monospace", marginBottom:"18px", textAlign:"center" }}>
-          STRATEGY BREAKDOWN — SCORED BY YOUR GOALS
+          STRATEGY BREAKDOWN — RANKED BY YOUR GOALS
         </div>
         <div style={{ position:"relative", height:"520px" }}>
           {ranked.map((p, i) => (
-            <StrategyCard key={p.id} path={p} rank={i} isFront={i===active}
+            <StrategyCard key={p.pathId} path={p} rank={i} isFront={i===active}
               offset={getOffset(i)} onClick={() => i !== active && setActive(i)}
               onDetail={() => setDetailIndex(i)} />
           ))}

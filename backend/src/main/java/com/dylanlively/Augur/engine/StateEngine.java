@@ -7,53 +7,31 @@ public class StateEngine {
     public CoffeeShopState computeDerived(CoffeeShopState state) {
         CoffeeShopState s = copy(state);
 
-        // ── Service capacity (monthly) ────────────────────────────────────────
-        double effectiveHours = Math.min(s.getHoursOpen(), 10)
-            + Math.max(0, s.getHoursOpen() - 10) * 0.3;
-        s.setServiceCapacity(s.getBaristas() * 12 * effectiveHours * 30);
+        // Service capacity (monthly)
+        s.setServiceCapacity(s.getBaristas() * 4 * s.getHoursOpen() * 30);
 
-        // ── Base foot traffic (monthly) ───────────────────────────────────────
-        double marketingMultiplier = 1 + 0.45 * Math.log1p(s.getMarketingSpend() / 250.0);
+        // Marketing: weak boost, baseline 1.0 at zero spend
+        double marketingMultiplier = 1 + 0.1 * Math.log1p(s.getMarketingSpend() / 500.0);
 
-        // Price elasticity: -18% customers per raise, compounding.
-        // IMPORTANT: This applies to POTENTIAL foot traffic, not capped customers.
-        // So even when utility-bottlenecked, raising prices destroys the future
-        // addressable market — once you upgrade utilities, you'll have fewer people
-        // to serve. The engine must look ahead to see this cost.
-        double priceElasticity = Math.pow(0.82, s.getPriceRaiseCount());
+        // Price elasticity: -25% foot traffic per $1 above $6
+        double priceElasticity = Math.pow(0.80, Math.max(0, s.getAvgOrderValue() - 6.0));
+
         s.setFootTraffic(s.getBaseFootTraffic() * 30 * marketingMultiplier * priceElasticity);
 
-        // ── Utility capacity (monthly) ────────────────────────────────────────
         double monthlyUtilityCapacity = s.getUtilityCapacity() * 30;
-
-        // ── Customers served ──────────────────────────────────────────────────
         double capacityLimit = Math.min(s.getServiceCapacity(), monthlyUtilityCapacity);
         s.setCustomersServed(Math.min(s.getFootTraffic(), capacityLimit));
 
-        // ── Revenue ───────────────────────────────────────────────────────────
         s.setRevenue(s.getCustomersServed() * s.getAvgOrderValue());
 
-        // ── COGS: variable per customer served ────────────────────────────────
-        double cogs = s.getCustomersServed() * 1.80;
+        double cogs  = s.getCustomersServed() * 1.4;
+        double wages = s.getBaristas() * s.getBaristaWage()
+                    * s.getHoursOpen() * 26;
+        double fixed = s.getRent() + s.getMarketingSpend();
 
-        // ── Wages: overtime at 1.5x past 10hrs ───────────────────────────────
-        double regularHours  = Math.min(s.getHoursOpen(), 10);
-        double overtimeHours = Math.max(0, s.getHoursOpen() - 10);
-        double wages = s.getBaristas() * s.getBaristaWage() * 30
-            * (regularHours + overtimeHours * 1.5);
-
-        // ── Fixed overhead ────────────────────────────────────────────────────
-        double utilityMaintenance = Math.max(0, (s.getUtilityCapacity() - 60) / 60.0) * 180;
-        double campaignOngoing    = s.getMarketingCampaignCount() * 280.0;
-
-        s.setOperatingCosts(wages + s.getRent() + s.getMarketingSpend()
-            + cogs + utilityMaintenance + campaignOngoing);
-
-        // ── Profit & runway ───────────────────────────────────────────────────
+        s.setOperatingCosts(cogs + wages + fixed);
         s.setProfit(s.getRevenue() - s.getOperatingCosts());
-        s.setRunway(s.getOperatingCosts() > 0
-            ? s.getCash() / s.getOperatingCosts()
-            : 999);
+        s.setRunway(s.getProfit() >= 0 ? 999 : s.getCash() / Math.abs(s.getProfit()));
 
         return s;
     }

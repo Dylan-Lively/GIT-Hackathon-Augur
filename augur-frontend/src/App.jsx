@@ -12,42 +12,44 @@ const ALL_MOVE_IDS = ["hire_barista", "upgrade_utilities", "increase_marketing",
 function AppInner() {
   const navigate = useNavigate()
 
-  // Setup
   const [preset, setPreset] = useState("coffee_shop")
   const [selectedMoves, setSelectedMoves] = useState(ALL_MOVE_IDS)
 
-  // Initial business state
   const [initialState, setInitialState] = useState({
     cash: 50000,
     baristas: 2,
-    hoursOpen: 8,
-    avgOrderValue: 6.0,
+    hoursOpen: 10,
+    avgOrderValue: 6,
     marketingSpend: 500,
     rent: 3000,
     baristaWage: 15,
-    baseFootTraffic: 100,
-    utilityCapacity: 60,
+    baseFootTraffic: 140,
+    utilityCapacity: 100,
   })
 
-  // Simulation parameters
   const [simParams, setSimParams] = useState({
     horizon: 6,
     maxCombos: 1,
     beamWidth: 10,
   })
 
-  // Scoring weights (0-100 scale, normalized before sending)
+  // Scoring weights on 0-100 scale — normalized to sum to 1.0 before sending
   const [scoringWeights, setScoringWeights] = useState({
-    cashWeight: 60,
-    profitWeight: 50,
-    growthWeight: 40,
-    riskTolerance: 40,
+    cashWeight: 33,
+    profitWeight: 34,
+    growthWeight: 33,
+    riskTolerance: 50,
   })
 
   const [simulationResult, setSimulationResult] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
 
   async function handleGenerate() {
+    // Normalize so weights always sum to exactly 1.0
+    const totalWeight = scoringWeights.cashWeight
+                      + scoringWeights.profitWeight
+                      + scoringWeights.growthWeight
+
     const payload = {
       preset,
       horizon: simParams.horizon,
@@ -55,12 +57,13 @@ function AppInner() {
       beamWidth: simParams.beamWidth,
       initialState: { type: preset, ...initialState },
       scoringWeights: {
-        cashWeight: scoringWeights.cashWeight / 100,
-        profitWeight: scoringWeights.profitWeight / 100,
-        growthWeight: scoringWeights.growthWeight / 100,
+        cashWeight:    scoringWeights.cashWeight   / totalWeight,
+        profitWeight:  scoringWeights.profitWeight / totalWeight,
+        growthWeight:  scoringWeights.growthWeight / totalWeight,
         riskTolerance: scoringWeights.riskTolerance,
       },
     }
+
     setIsLoading(true)
     setSimulationResult(null)
     navigate("/results")
@@ -93,7 +96,11 @@ function AppInner() {
           />
         } />
         <Route path="/results" element={
-          <Results result={simulationResult} initialState={initialState} isLoading={isLoading} />
+          <Results
+            result={simulationResult}
+            initialState={initialState}
+            isLoading={isLoading}
+          />
         } />
       </Routes>
     </>

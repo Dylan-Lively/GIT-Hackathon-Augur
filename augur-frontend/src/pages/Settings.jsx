@@ -79,14 +79,27 @@ export default function Settings({ state, onChange, simParams, setSimParams }) {
   const handleStateChange = (key, val) => onChange(prev => ({ ...prev, [key]: val }))
   const handleParamChange = (key, val) => setSimParams(prev => ({ ...prev, [key]: val }))
 
-  // Live preview — mirrors StateEngine.java
-  const serviceCapacity = state.baristas * 20 * state.hoursOpen * 30
-  const footTraffic = state.baseFootTraffic * (1 + Math.log(Math.max(1, state.marketingSpend / 500)))
-  const customersServed = Math.min(footTraffic, Math.min(serviceCapacity, state.utilityCapacity))
-  const revenue = customersServed * state.avgOrderValue * 30
-  const wages = state.baristas * state.baristaWage * state.hoursOpen * 30
-  const cogs = revenue * 0.35
-  const operatingCosts = wages + state.rent + state.marketingSpend + cogs
+  // Mirrors StateEngine.java exactly
+  const effectiveHours = Math.min(state.hoursOpen, 10) + Math.max(0, state.hoursOpen - 10) * 0.3
+  const serviceCapacity = state.baristas * 12 * effectiveHours * 30
+
+  const marketingMultiplier = 1 + 0.45 * Math.log1p(state.marketingSpend / 250.0)
+  const priceElasticity = Math.pow(0.82, 0) // no raises at start
+  const footTraffic = state.baseFootTraffic * 30 * marketingMultiplier * priceElasticity
+
+  const monthlyUtilityCapacity = state.utilityCapacity * 30
+  const capacityLimit = Math.min(serviceCapacity, monthlyUtilityCapacity)
+  const customersServed = Math.min(footTraffic, capacityLimit)
+
+  const revenue = customersServed * state.avgOrderValue
+
+  const cogs = customersServed * 1.80
+  const regularHours = Math.min(state.hoursOpen, 10)
+  const overtimeHours = Math.max(0, state.hoursOpen - 10)
+  const wages = state.baristas * state.baristaWage * 30 * (regularHours + overtimeHours * 1.5)
+  const utilityMaintenance = Math.max(0, (state.utilityCapacity - 60) / 60.0) * 180
+
+  const operatingCosts = wages + state.rent + state.marketingSpend + cogs + utilityMaintenance
   const profit = revenue - operatingCosts
   const runway = operatingCosts > 0 ? state.cash / operatingCosts : 999
 
@@ -94,7 +107,7 @@ export default function Settings({ state, onChange, simParams, setSimParams }) {
   const fmtN = n => Math.round(n).toLocaleString()
 
   const bottleneck =
-    customersServed === state.utilityCapacity ? "Utility Capacity"
+    customersServed === monthlyUtilityCapacity ? "Utility Capacity"
     : customersServed === serviceCapacity ? "Service Capacity"
     : "Foot Traffic"
 
@@ -122,7 +135,6 @@ export default function Settings({ state, onChange, simParams, setSimParams }) {
               </div>
             ))}
 
-            {/* Simulation parameters */}
             <div style={{ marginBottom: "28px" }}>
               <div style={{ fontSize: "10px", color: "#94a3b8", letterSpacing: "2px", fontFamily: "monospace", marginBottom: "12px" }}>SIMULATION PARAMETERS</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
@@ -133,16 +145,15 @@ export default function Settings({ state, onChange, simParams, setSimParams }) {
             </div>
           </div>
 
-          {/* Sticky live preview */}
           <div style={{ position: "sticky", top: "76px" }}>
             <div style={{ fontSize: "10px", color: "#94a3b8", letterSpacing: "2px", fontFamily: "monospace", marginBottom: "12px" }}>LIVE PREVIEW</div>
 
             <div style={{ background: "white", borderRadius: "12px", border: "1px solid #e2e8f0", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)", marginBottom: "12px" }}>
               {[
-                { label: "MONTHLY REVENUE", value: fmt(revenue), color: "#16a34a" },
-                { label: "OPERATING COSTS", value: fmt(operatingCosts), color: "#ef4444" },
-                { label: "MONTHLY PROFIT", value: fmt(profit), color: profit >= 0 ? "#16a34a" : "#ef4444" },
-                { label: "RUNWAY", value: `${Math.min(runway, 999).toFixed(1)} mo`, color: runway < 3 ? "#ef4444" : runway < 6 ? "#d97706" : "#16a34a" },
+                { label: "MONTHLY REVENUE",  value: fmt(revenue),      color: "#16a34a" },
+                { label: "OPERATING COSTS",  value: fmt(operatingCosts), color: "#ef4444" },
+                { label: "MONTHLY PROFIT",   value: fmt(profit),        color: profit >= 0 ? "#16a34a" : "#ef4444" },
+                { label: "RUNWAY",           value: `${Math.min(runway, 999).toFixed(1)} mo`, color: runway < 3 ? "#ef4444" : runway < 6 ? "#d97706" : "#16a34a" },
               ].map(({ label, value, color }, i, arr) => (
                 <div key={label} style={{ padding: "13px 18px", borderBottom: i < arr.length - 1 ? "1px solid #f8fafc" : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ fontSize: "9px", color: "#94a3b8", letterSpacing: "1.5px", fontFamily: "monospace" }}>{label}</div>
@@ -153,9 +164,9 @@ export default function Settings({ state, onChange, simParams, setSimParams }) {
 
             <div style={{ background: "white", borderRadius: "12px", border: "1px solid #e2e8f0", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)", marginBottom: "12px" }}>
               {[
-                { label: "CUSTOMERS / DAY", value: fmtN(customersServed) },
+                { label: "CUSTOMERS / MO",   value: fmtN(customersServed) },
                 { label: "SERVICE CAPACITY", value: fmtN(serviceCapacity) },
-                { label: "FOOT TRAFFIC", value: fmtN(footTraffic) },
+                { label: "FOOT TRAFFIC",     value: fmtN(footTraffic) },
               ].map(({ label, value }, i, arr) => (
                 <div key={label} style={{ padding: "13px 18px", borderBottom: i < arr.length - 1 ? "1px solid #f8fafc" : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ fontSize: "9px", color: "#94a3b8", letterSpacing: "1.5px", fontFamily: "monospace" }}>{label}</div>
@@ -176,7 +187,6 @@ export default function Settings({ state, onChange, simParams, setSimParams }) {
           </div>
         </div>
 
-        {/* Footer */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 22px", marginTop: "32px", background: "white", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
           <button onClick={() => navigate("/setup")} style={{ padding: "10px 20px", background: "white", border: "1px solid #e2e8f0", borderRadius: "8px", color: "#64748b", fontSize: "11px", fontWeight: "700", letterSpacing: "1.5px", cursor: "pointer", fontFamily: "monospace" }}>← BACK</button>
           <button onClick={() => navigate("/")} style={{ padding: "10px 24px", background: "#0f172a", border: "none", borderRadius: "8px", color: "white", fontSize: "11px", fontWeight: "700", letterSpacing: "1.5px", cursor: "pointer", fontFamily: "monospace" }}>NEXT: GOALS & GENERATE →</button>
