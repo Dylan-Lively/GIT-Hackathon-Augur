@@ -10,5 +10,5 @@ import java.util.List;
 @NoArgsConstructor
 public class SimulationResult {
     private int pathsEvaluated;
-    private List<Path<?>> topPaths;
+    private List<Path> topPaths;
 }
